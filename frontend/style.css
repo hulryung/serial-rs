@@ -1,0 +1,50 @@
+/* Reset and base */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #1e1e1e; color: #d4d4d4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+/* App layout */
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Toolbar */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #404040;
+  flex-shrink: 0;
+}
+
+/* Style selects and buttons with dark theme */
+select, button {
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+select:hover, button:hover { background: #4a4a4a; }
+button:active { background: #555; }
+
+#connect-btn { min-width: 100px; }
+#connect-btn.connected { background: #c0392b; border-color: #e74c3c; }
+#connect-btn.connected:hover { background: #e74c3c; }
+
+#refresh-btn { padding: 6px 8px; font-size: 16px; }
+
+/* Status indicator */
+#status-indicator {
+  margin-left: auto;
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 12px;
+}
+#status-indicator.disconnected { color: #e74c3c; }
+#status-indicator.connected { color: #2ecc71; }
+
+/* Terminal fills remaining space */
+#terminal-container { flex: 1; padding: 4px; }
+#terminal-container .xterm { height: 100%; }

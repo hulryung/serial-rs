@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Serial Terminal</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.5.0/css/xterm.css">
+</head>
+<body>
+  <div id="app">
+    <div id="toolbar">
+      <!-- Port selector -->
+      <select id="port-select"><option value="">Select Port...</option></select>
+      <button id="refresh-btn" title="Refresh ports">&#x21bb;</button>
+
+      <!-- Baud rate -->
+      <select id="baud-select">
+        <option value="9600">9600</option>
+        <option value="19200">19200</option>
+        <option value="38400">38400</option>
+        <option value="57600">57600</option>
+        <option value="115200" selected>115200</option>
+      </select>
+
+      <!-- Data bits -->
+      <select id="databits-select">
+        <option value="8" selected>8 bit</option>
+        <option value="7">7 bit</option>
+        <option value="6">6 bit</option>
+        <option value="5">5 bit</option>
+      </select>
+
+      <!-- Stop bits -->
+      <select id="stopbits-select">
+        <option value="1" selected>1 stop</option>
+        <option value="2">2 stop</option>
+      </select>
+
+      <!-- Parity -->
+      <select id="parity-select">
+        <option value="none" selected>No Parity</option>
+        <option value="odd">Odd</option>
+        <option value="even">Even</option>
+      </select>
+
+      <!-- Connect/Disconnect -->
+      <button id="connect-btn">Connect</button>
+
+      <!-- Status -->
+      <span id="status-indicator" class="disconnected">Disconnected</span>
+    </div>
+    <div id="terminal-container"></div>
+  </div>
+
+  <script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://unpkg.com/@xterm/addon-attach@0.11.0/lib/addon-attach.js"></script>
+  <script src="https://unpkg.com/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
