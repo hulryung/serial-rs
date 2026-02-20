@@ -17,3 +17,13 @@
   - Static file serving from `frontend/` via `tower_http::services::ServeDir` as fallback
   - Server listens on `0.0.0.0:3000`
   - Builds successfully with zero warnings
+- **[Leader]** UI 개선 및 버그 수정:
+  - xterm 터미널 오버플로우 수정 (min-height:0, overflow:hidden)
+  - 네이비 다크 컬러 스킴 (#1a1a2e, #16213e, #0f3460, #e94560)
+  - 툴바 그룹화 (Port / Baud / Config) + 라벨 + 구분선
+  - 상태 LED 점 + 연결 시 glow 효과
+  - 브라우저 새로고침 시 자동 재연결 (GET /api/status 확인 후 WebSocket 복원)
+  - 하단 상태바 추가 (macOS Tahoe 둥근 모서리 클리핑 대응)
+  - 스크롤백 링 버퍼 128KB (새로고침 시 이전 터미널 출력 복원)
+  - rust-embed로 프론트엔드를 바이너리에 임베드 (2.5MB standalone)
+- **[Next]** Tauri v2로 데스크톱 앱 전환 예정 (브라우저 없이 네이티브 창으로 실행)

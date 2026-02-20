@@ -41,11 +41,26 @@ Browser (xterm.js) <--WebSocket(binary)--> Axum Backend <--tokio-serial--> Seria
 - [x] 연결/해제 버튼
 - [x] 상태 표시
 
-### Phase 4: Integration & Testing
+### Phase 4: Standalone & Polish
 - [x] 빌드 검증 (cargo build 성공)
-- [ ] 실제 시리얼 포트 연결 테스트
-- [ ] 에러 케이스 처리 (포트 분리, 연결 끊김)
-- [ ] 빌드 스크립트 (프론트엔드 번들링)
+- [x] 실제 시리얼 포트 연결 테스트
+- [x] 브라우저 새로고침 시 자동 재연결
+- [x] 스크롤백 버퍼 (128KB, 새로고침 시 이전 출력 복원)
+- [x] rust-embed로 프론트엔드 바이너리 임베드 (2.5MB 단일 실행 파일)
+- [x] UI 개선 (네이비 다크 테마, 상태바, macOS Tahoe 둥근 모서리 대응)
+
+### Phase 5: Tauri 데스크톱 앱 전환 (TODO)
+브라우저 없이 독립 실행 가능한 네이티브 앱으로 전환
+
+- [ ] Tauri v2 프로젝트 초기화 (`cargo tauri init`)
+- [ ] 기존 프론트엔드(HTML/CSS/JS)를 Tauri WebView에서 로드
+- [ ] Axum 서버를 Tauri 백엔드로 통합 (또는 사이드카 프로세스로 실행)
+- [ ] 시리얼 포트 통신을 Tauri IPC (invoke)로 전환 검토
+  - 방법 A: 기존 Axum+WebSocket 구조 유지, Tauri가 WebView만 제공
+  - 방법 B: Tauri command로 시리얼 통신 직접 구현 (tauri-plugin-serialplugin 활용)
+- [ ] 앱 아이콘, 윈도우 설정 (크기, 타이틀바)
+- [ ] macOS .app 번들 빌드 (`cargo tauri build`)
+- [ ] (선택) 시스템 트레이, 메뉴바 통합
 
 ## API Specification
 
