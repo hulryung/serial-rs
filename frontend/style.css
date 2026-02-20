@@ -117,3 +117,16 @@ select:disabled, button:disabled {
   overflow: hidden;
   padding: 4px;
 }
+
+/* Bottom status bar - also prevents macOS rounded corner clipping */
+#statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 16px;
+  background: #16213e;
+  border-top: 1px solid #0f3460;
+  font-size: 12px;
+  color: #7a7a9e;
+  flex-shrink: 0;
+}

@@ -9,6 +9,7 @@
   const refreshBtn = document.getElementById('refresh-btn');
   const statusIndicator = document.getElementById('status-indicator');
   const terminalContainer = document.getElementById('terminal-container');
+  const statusbarPort = document.getElementById('statusbar-port');
 
   // State
   let term = null;
@@ -177,7 +178,7 @@
       connectBtn.classList.add('connected');
       statusIndicator.textContent = 'Connected';
       statusIndicator.className = 'connected';
-      // Disable config selects while connected
+      statusbarPort.textContent = portSelect.value + ' @ ' + baudSelect.value;
       portSelect.disabled = true;
       baudSelect.disabled = true;
       databitsSelect.disabled = true;
@@ -188,6 +189,7 @@
       connectBtn.classList.remove('connected');
       statusIndicator.textContent = 'Disconnected';
       statusIndicator.className = 'disconnected';
+      statusbarPort.textContent = 'No connection';
       portSelect.disabled = false;
       baudSelect.disabled = false;
       databitsSelect.disabled = false;
