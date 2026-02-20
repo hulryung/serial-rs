@@ -19,6 +19,7 @@ use tokio::{
     task::JoinHandle,
 };
 use rust_embed::Embed;
+use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tokio_serial::SerialPortBuilderExt;
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ use tokio_serial::SerialPortBuilderExt;
 // ---------------------------------------------------------------------------
 
 #[derive(Embed)]
-#[folder = "frontend/"]
+#[folder = "../frontend/"]
 struct Assets;
 
 // ---------------------------------------------------------------------------
@@ -435,13 +436,10 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Axum server
 // ---------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
-
+async fn start_axum_server() {
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(1024);
 
     let state = Arc::new(AppState {
@@ -459,13 +457,71 @@ async fn main() {
         .with_state(state)
         .fallback(static_handler);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
-        .expect("Failed to bind to 0.0.0.0:3000");
+        .expect("Failed to bind to 127.0.0.1:3000");
 
-    tracing::info!("Server listening on http://0.0.0.0:3000");
+    tracing::info!("Axum server listening on http://127.0.0.1:3000");
 
     axum::serve(listener, app)
         .await
         .expect("Server error");
+}
+
+// ---------------------------------------------------------------------------
+// Tauri entry point
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tracing_subscriber::fmt::init();
+
+    tauri::Builder::default()
+        .setup(|app| {
+            // Native macOS menu bar
+            let app_menu = Submenu::with_items(
+                app,
+                "Serial Terminal",
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, Some("About Serial Terminal"), None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, Some("Quit Serial Terminal"))?,
+                ],
+            )?;
+
+            let edit_menu = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+
+            let window_menu = Submenu::with_items(
+                app,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::close_window(app, None)?,
+                ],
+            )?;
+
+            let menu = Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?;
+            app.set_menu(menu)?;
+
+            // Spawn the Axum server as a background task
+            tauri::async_runtime::spawn(async move {
+                start_axum_server().await;
+            });
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

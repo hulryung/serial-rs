@@ -49,18 +49,18 @@ Browser (xterm.js) <--WebSocket(binary)--> Axum Backend <--tokio-serial--> Seria
 - [x] rust-embed로 프론트엔드 바이너리 임베드 (2.5MB 단일 실행 파일)
 - [x] UI 개선 (네이비 다크 테마, 상태바, macOS Tahoe 둥근 모서리 대응)
 
-### Phase 5: Tauri 데스크톱 앱 전환 (TODO)
-브라우저 없이 독립 실행 가능한 네이티브 앱으로 전환
+### Phase 5: Tauri 데스크톱 앱 전환
+브라우저 없이 독립 실행 가능한 네이티브 앱으로 전환 (방법 A: Axum+WebSocket 유지)
 
-- [ ] Tauri v2 프로젝트 초기화 (`cargo tauri init`)
-- [ ] 기존 프론트엔드(HTML/CSS/JS)를 Tauri WebView에서 로드
-- [ ] Axum 서버를 Tauri 백엔드로 통합 (또는 사이드카 프로세스로 실행)
-- [ ] 시리얼 포트 통신을 Tauri IPC (invoke)로 전환 검토
-  - 방법 A: 기존 Axum+WebSocket 구조 유지, Tauri가 WebView만 제공
-  - 방법 B: Tauri command로 시리얼 통신 직접 구현 (tauri-plugin-serialplugin 활용)
-- [ ] 앱 아이콘, 윈도우 설정 (크기, 타이틀바)
-- [ ] macOS .app 번들 빌드 (`cargo tauri build`)
-- [ ] (선택) 시스템 트레이, 메뉴바 통합
+- [x] Tauri v2 프로젝트 초기화 (src-tauri/ 디렉토리 구조)
+- [x] 기존 프론트엔드(HTML/CSS/JS)를 Tauri WebView에서 로드
+- [x] Axum 서버를 Tauri 백엔드로 통합 (setup hook에서 background task로 실행)
+- [x] 방법 A 채택: 기존 Axum+WebSocket 구조 유지, Tauri가 WebView만 제공
+- [x] 앱 아이콘, 윈도우 설정 (960x640, "Serial Terminal")
+- [x] `cargo tauri dev` 실행 검증 완료
+- [x] macOS .app 번들 빌드 (`cargo tauri build`) - 9.6MB .app / 3.3MB DMG
+- [x] 앱 아이콘 (네이비 배경 + ">_" 터미널 심볼 + coral 악센트)
+- [x] macOS 네이티브 메뉴바 (App/Edit/Window 메뉴, Copy/Paste/Select All 지원)
 
 ## API Specification
 

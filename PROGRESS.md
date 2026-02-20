@@ -26,4 +26,18 @@
   - 하단 상태바 추가 (macOS Tahoe 둥근 모서리 클리핑 대응)
   - 스크롤백 링 버퍼 128KB (새로고침 시 이전 터미널 출력 복원)
   - rust-embed로 프론트엔드를 바이너리에 임베드 (2.5MB standalone)
-- **[Next]** Tauri v2로 데스크톱 앱 전환 예정 (브라우저 없이 네이티브 창으로 실행)
+- **[Team]** Tauri v2 데스크톱 앱 전환 완료 (방법 A: Axum+WebSocket 유지):
+  - `src-tauri/` 디렉토리 구조 생성 (Cargo.toml, build.rs, tauri.conf.json, capabilities)
+  - 기존 `src/main.rs` 코드를 `src-tauri/src/lib.rs`로 이전
+  - Axum 서버를 Tauri `.setup()` hook에서 background task로 실행
+  - Tauri WebView가 `http://localhost:3000`을 로드하여 기존 프론트엔드 표시
+  - rust-embed 경로를 `../frontend/`로 조정
+  - 서버 바인딩을 `127.0.0.1:3000`으로 변경 (localhost only)
+  - 워크스페이스 구조로 전환 (root Cargo.toml → workspace)
+  - `cargo tauri dev` 실행 검증 완료 (네이티브 창에서 시리얼 터미널 정상 동작)
+  - placeholder 아이콘 생성 (32x32, 128x128, 128x128@2x, icns, ico)
+- **[Team]** Phase 5 마무리:
+  - 앱 아이콘 생성 (네이비 라운드 사각형 + ">_" 터미널 프롬프트 + coral 악센트, 모든 필수 사이즈)
+  - macOS 네이티브 메뉴바 추가 (App: About/Quit, Edit: Copy/Paste/Select All, Window: Minimize/Close)
+  - `cargo tauri build` 성공 → Serial Terminal.app (9.6MB), DMG (3.3MB)
+  - Bundle identifier: `com.serialrs.terminal`
