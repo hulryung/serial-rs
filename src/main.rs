@@ -18,8 +18,16 @@ use tokio::{
     sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
 };
+use rust_embed::Embed;
 use tokio_serial::SerialPortBuilderExt;
-use tower_http::services::ServeDir;
+
+// ---------------------------------------------------------------------------
+// Embedded frontend assets
+// ---------------------------------------------------------------------------
+
+#[derive(Embed)]
+#[folder = "frontend/"]
+struct Assets;
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -394,6 +402,39 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 }
 
 // ---------------------------------------------------------------------------
+// Embedded static file handler
+// ---------------------------------------------------------------------------
+
+async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    match Assets::get(path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+                file.data,
+            )
+                .into_response()
+        }
+        None => {
+            // Fallback to index.html for SPA-like behavior
+            match Assets::get("index.html") {
+                Some(file) => (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "text/html")],
+                    file.data,
+                )
+                    .into_response(),
+                None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -416,7 +457,7 @@ async fn main() {
         .route("/api/status", get(status))
         .route("/ws", get(ws_handler))
         .with_state(state)
-        .fallback_service(ServeDir::new("frontend"));
+        .fallback(static_handler);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
