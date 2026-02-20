@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use axum::{
@@ -64,11 +65,12 @@ struct SerialConnection {
     writer_handle: JoinHandle<()>,
 }
 
+const SCROLLBACK_MAX: usize = 128 * 1024; // 128KB
+
 struct AppState {
     serial_connection: Mutex<Option<SerialConnection>>,
-    // Keep a persistent broadcast sender so WebSocket clients can subscribe
-    // even before a serial connection exists. Data only flows when connected.
     broadcast_tx: broadcast::Sender<Vec<u8>>,
+    scrollback: Mutex<VecDeque<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +149,9 @@ async fn connect(
     State(state): State<Arc<AppState>>,
     Json(config): Json<PortConfig>,
 ) -> impl IntoResponse {
+    // Clear scrollback for new connection
+    state.scrollback.lock().await.clear();
+
     let mut conn = state.serial_connection.lock().await;
 
     if conn.is_some() {
@@ -188,8 +193,9 @@ async fn connect(
     // Use the shared broadcast sender
     let broadcast_tx = state.broadcast_tx.clone();
 
-    // Reader task: serial -> broadcast
+    // Reader task: serial -> broadcast + scrollback
     let bc_tx = broadcast_tx.clone();
+    let state_for_reader = state.clone();
     let reader_handle = tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         loop {
@@ -200,7 +206,14 @@ async fn connect(
                 }
                 Ok(n) => {
                     let data = buf[..n].to_vec();
-                    // Ignore send error (no receivers is okay)
+                    // Append to scrollback buffer
+                    {
+                        let mut sb = state_for_reader.scrollback.lock().await;
+                        sb.extend(&data);
+                        while sb.len() > SCROLLBACK_MAX {
+                            sb.pop_front();
+                        }
+                    }
                     let _ = bc_tx.send(data);
                 }
                 Err(e) => {
@@ -248,6 +261,7 @@ async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             tracing::info!("Disconnecting from {}", c.port_name);
             c.reader_handle.abort();
             c.writer_handle.abort();
+            state.scrollback.lock().await.clear();
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -295,6 +309,17 @@ async fn ws_handler(
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Send scrollback buffer first so client sees previous output
+    {
+        let sb = state.scrollback.lock().await;
+        if !sb.is_empty() {
+            let data: Vec<u8> = sb.iter().copied().collect();
+            if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                return;
+            }
+        }
+    }
 
     // Subscribe to broadcast for serial RX data
     let mut broadcast_rx = state.broadcast_tx.subscribe();
@@ -381,6 +406,7 @@ async fn main() {
     let state = Arc::new(AppState {
         serial_connection: Mutex::new(None),
         broadcast_tx,
+        scrollback: Mutex::new(VecDeque::new()),
     });
 
     let app = Router::new()
