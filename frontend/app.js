@@ -15,12 +15,36 @@
   const terminalContainer = document.getElementById('terminal-container');
   const statusbarPort = document.getElementById('statusbar-port');
 
+  const settingsBtn = document.getElementById('settings-btn');
+  const settingsModal = document.getElementById('settings-modal');
+  const settingsCloseBtn = document.getElementById('settings-close-btn');
+  const filterCuCheckbox = document.getElementById('setting-filter-cu');
+
   // State
   let term = null;
   let ws = null;
   let attachAddon = null;
   let fitAddon = null;
   let connected = false;
+  let settings = loadSettings();
+
+  // Settings management
+  function loadSettings() {
+    try {
+      var saved = JSON.parse(localStorage.getItem('serial-rs-settings'));
+      return Object.assign({ filterCuOnly: true }, saved);
+    } catch (e) {
+      return { filterCuOnly: true };
+    }
+  }
+
+  function saveSettings() {
+    localStorage.setItem('serial-rs-settings', JSON.stringify(settings));
+  }
+
+  function applySettingsToUI() {
+    filterCuCheckbox.checked = settings.filterCuOnly;
+  }
 
   // Initialize xterm.js terminal
   function initTerminal() {
@@ -54,7 +78,14 @@
       // Clear existing options
       portSelect.innerHTML = '<option value="">Select Port...</option>';
 
-      ports.forEach(function(p) {
+      var filtered = ports;
+      if (settings.filterCuOnly) {
+        filtered = ports.filter(function(p) {
+          return !p.name.startsWith('/dev/tty.');
+        });
+      }
+
+      filtered.forEach(function(p) {
         const opt = document.createElement('option');
         opt.value = p.name;
         opt.textContent = p.name + ' (' + p.port_type + ')';
@@ -154,13 +185,18 @@
 
   // Disconnect
   async function disconnect() {
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
+    connected = false;
+
     if (attachAddon) {
       attachAddon.dispose();
       attachAddon = null;
+    }
+    if (ws) {
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      ws = null;
     }
 
     try {
@@ -169,7 +205,6 @@
       console.error('Disconnect error:', e);
     }
 
-    connected = false;
     updateUI();
     term.writeln('\r\n[Disconnected]');
   }
@@ -212,6 +247,24 @@
 
   refreshBtn.addEventListener('click', refreshPorts);
 
+  settingsBtn.addEventListener('click', function() {
+    settingsModal.classList.remove('hidden');
+  });
+
+  settingsCloseBtn.addEventListener('click', function() {
+    settingsModal.classList.add('hidden');
+  });
+
+  settingsModal.addEventListener('click', function(e) {
+    if (e.target === settingsModal) settingsModal.classList.add('hidden');
+  });
+
+  filterCuCheckbox.addEventListener('change', function() {
+    settings.filterCuOnly = filterCuCheckbox.checked;
+    saveSettings();
+    refreshPorts();
+  });
+
   // Handle window resize
   window.addEventListener('resize', function() {
     if (fitAddon) fitAddon.fit();
@@ -226,6 +279,7 @@
   });
 
   // Initialize
+  applySettingsToUI();
   initTerminal();
   refreshPorts();
   checkAndReconnect();
