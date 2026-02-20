@@ -26,8 +26,16 @@
   const confirmAlwaysBtn = document.getElementById('confirm-always');
   const confirmCancelBtn = document.getElementById('confirm-cancel');
 
+  const serverEnabledCheckbox = document.getElementById('setting-server-enabled');
+  const serverDetails = document.getElementById('server-details');
+  const authTokenInput = document.getElementById('setting-auth-token');
+  const copyTokenBtn = document.getElementById('copy-token-btn');
+  const regenerateTokenBtn = document.getElementById('regenerate-token-btn');
+  const serverClientsSpan = document.getElementById('server-clients');
+
   // State
   let term = null;
+  let serverRefreshInterval = null;
   let ws = null;
   let attachAddon = null;
   let fitAddon = null;
@@ -305,16 +313,26 @@
 
   refreshBtn.addEventListener('click', refreshPorts);
 
-  settingsBtn.addEventListener('click', function() {
+  function openSettingsModal() {
     settingsModal.classList.remove('hidden');
-  });
+    refreshServerStatus();
+    serverRefreshInterval = setInterval(refreshServerStatus, 5000);
+  }
 
-  settingsCloseBtn.addEventListener('click', function() {
+  function closeSettingsModal() {
     settingsModal.classList.add('hidden');
-  });
+    if (serverRefreshInterval) {
+      clearInterval(serverRefreshInterval);
+      serverRefreshInterval = null;
+    }
+  }
+
+  settingsBtn.addEventListener('click', openSettingsModal);
+
+  settingsCloseBtn.addEventListener('click', closeSettingsModal);
 
   settingsModal.addEventListener('click', function(e) {
-    if (e.target === settingsModal) settingsModal.classList.add('hidden');
+    if (e.target === settingsModal) closeSettingsModal();
   });
 
   filterCuCheckbox.addEventListener('change', function() {
@@ -326,6 +344,44 @@
   alwaysReconnectCheckbox.addEventListener('change', function() {
     settings.alwaysReconnect = alwaysReconnectCheckbox.checked;
     saveSettings();
+  });
+
+  // Server management
+  async function refreshServerStatus() {
+    try {
+      var res = await fetch(API_BASE + '/api/server/status');
+      var data = await res.json();
+      serverEnabledCheckbox.checked = data.enabled;
+      authTokenInput.value = data.token;
+      serverClientsSpan.textContent = 'Clients: ' + data.clients;
+      serverDetails.classList.toggle('hidden', !data.enabled);
+    } catch (e) {
+      console.error('Failed to fetch server status:', e);
+    }
+  }
+
+  serverEnabledCheckbox.addEventListener('change', async function() {
+    try {
+      await fetch(API_BASE + '/api/server/toggle', { method: 'POST' });
+      await refreshServerStatus();
+    } catch (e) {
+      console.error('Failed to toggle server:', e);
+    }
+  });
+
+  copyTokenBtn.addEventListener('click', function() {
+    navigator.clipboard.writeText(authTokenInput.value).catch(function(e) {
+      console.error('Failed to copy token:', e);
+    });
+  });
+
+  regenerateTokenBtn.addEventListener('click', async function() {
+    try {
+      await fetch(API_BASE + '/api/server/regenerate-token', { method: 'POST' });
+      await refreshServerStatus();
+    } catch (e) {
+      console.error('Failed to regenerate token:', e);
+    }
   });
 
   // Handle window resize
