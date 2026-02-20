@@ -1,4 +1,8 @@
 (function() {
+  // Backend server URL (Axum serves API and WebSocket)
+  const API_BASE = 'http://localhost:3000';
+  const WS_BASE = 'ws://localhost:3000';
+
   // DOM elements
   const portSelect = document.getElementById('port-select');
   const baudSelect = document.getElementById('baud-select');
@@ -44,7 +48,7 @@
   // Fetch available ports
   async function refreshPorts() {
     try {
-      const res = await fetch('/api/ports');
+      const res = await fetch(API_BASE + '/api/ports');
       const ports = await res.json();
 
       // Clear existing options
@@ -64,8 +68,7 @@
 
   // Open WebSocket and attach to terminal
   function openWebSocket(label) {
-    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(wsProtocol + '//' + location.host + '/ws');
+    ws = new WebSocket(WS_BASE + '/ws');
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
@@ -94,7 +97,7 @@
   // Check backend status and reconnect if port is already open
   async function checkAndReconnect() {
     try {
-      var res = await fetch('/api/status');
+      var res = await fetch(API_BASE + '/api/status');
       var status = await res.json();
       if (status.connected) {
         term.writeln('\r\n[Reconnecting] ' + status.port + '...');
@@ -130,7 +133,7 @@
     };
 
     try {
-      const res = await fetch('/api/connect', {
+      const res = await fetch(API_BASE + '/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -161,7 +164,7 @@
     }
 
     try {
-      await fetch('/api/disconnect', { method: 'POST' });
+      await fetch(API_BASE + '/api/disconnect', { method: 'POST' });
     } catch (e) {
       console.error('Disconnect error:', e);
     }

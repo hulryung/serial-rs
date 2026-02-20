@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.serialrs.terminal",
   "build": {
-    "frontendDist": "http://localhost:3000",
-    "devUrl": "http://localhost:3000"
+    "frontendDist": "../frontend"
   },
   "app": {
     "windows": [
@@ -19,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://localhost:* https://cdn.jsdelivr.net; connect-src http://localhost:* ws://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:* https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* https://cdn.jsdelivr.net; img-src 'self' data: http://localhost:*; font-src 'self' data: http://localhost:* https://cdn.jsdelivr.net"
+      "csp": "default-src 'self' http://localhost:* https://unpkg.com; connect-src 'self' http://localhost:* ws://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:* https://unpkg.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* https://unpkg.com; img-src 'self' data: http://localhost:*; font-src 'self' data: http://localhost:* https://unpkg.com"
     }
   },
   "bundle": {

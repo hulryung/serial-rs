@@ -21,6 +21,7 @@ use tokio::{
 use rust_embed::Embed;
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tokio_serial::SerialPortBuilderExt;
+use tower_http::cors::CorsLayer;
 
 // ---------------------------------------------------------------------------
 // Embedded frontend assets
@@ -448,6 +449,8 @@ async fn start_axum_server() {
         scrollback: Mutex::new(VecDeque::new()),
     });
 
+    let cors = CorsLayer::very_permissive();
+
     let app = Router::new()
         .route("/api/ports", get(list_ports))
         .route("/api/connect", post(connect))
@@ -455,7 +458,8 @@ async fn start_axum_server() {
         .route("/api/status", get(status))
         .route("/ws", get(ws_handler))
         .with_state(state)
-        .fallback(static_handler);
+        .fallback(static_handler)
+        .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
