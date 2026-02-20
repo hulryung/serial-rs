@@ -59,6 +59,22 @@
       <button id="settings-btn" title="Settings">&#x2699;</button>
     </div>
 
+    <div id="confirm-modal" class="settings-overlay hidden">
+      <div class="settings-dialog">
+        <div class="settings-header">
+          <span>Reconnect</span>
+        </div>
+        <div class="settings-body">
+          <p id="confirm-message" class="confirm-message">A connection is already active. Disconnect and reconnect?</p>
+          <div class="confirm-buttons">
+            <button id="confirm-reconnect">Reconnect</button>
+            <button id="confirm-always">Always</button>
+            <button id="confirm-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="settings-modal" class="settings-overlay hidden">
       <div class="settings-dialog">
         <div class="settings-header">
@@ -71,6 +87,10 @@
             <label class="settings-option">
               <input type="checkbox" id="setting-filter-cu" checked>
               <span>Show only /dev/cu.* ports</span>
+            </label>
+            <label class="settings-option">
+              <input type="checkbox" id="setting-always-reconnect">
+              <span>Always reconnect (skip confirmation)</span>
             </label>
           </div>
         </div>

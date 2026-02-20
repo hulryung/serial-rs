@@ -20,6 +20,12 @@
   const settingsCloseBtn = document.getElementById('settings-close-btn');
   const filterCuCheckbox = document.getElementById('setting-filter-cu');
 
+  const alwaysReconnectCheckbox = document.getElementById('setting-always-reconnect');
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmReconnectBtn = document.getElementById('confirm-reconnect');
+  const confirmAlwaysBtn = document.getElementById('confirm-always');
+  const confirmCancelBtn = document.getElementById('confirm-cancel');
+
   // State
   let term = null;
   let ws = null;
@@ -32,9 +38,9 @@
   function loadSettings() {
     try {
       var saved = JSON.parse(localStorage.getItem('serial-rs-settings'));
-      return Object.assign({ filterCuOnly: true }, saved);
+      return Object.assign({ filterCuOnly: true, alwaysReconnect: false }, saved);
     } catch (e) {
-      return { filterCuOnly: true };
+      return { filterCuOnly: true, alwaysReconnect: false };
     }
   }
 
@@ -44,6 +50,7 @@
 
   function applySettingsToUI() {
     filterCuCheckbox.checked = settings.filterCuOnly;
+    alwaysReconnectCheckbox.checked = settings.alwaysReconnect;
   }
 
   // Initialize xterm.js terminal
@@ -147,6 +154,36 @@
     }
   }
 
+  // Show reconnect confirm dialog; resolves to 'reconnect', 'always', or 'cancel'
+  function showReconnectConfirm() {
+    return new Promise(function(resolve) {
+      confirmModal.classList.remove('hidden');
+
+      function cleanup() {
+        confirmModal.classList.add('hidden');
+        confirmReconnectBtn.removeEventListener('click', onReconnect);
+        confirmAlwaysBtn.removeEventListener('click', onAlways);
+        confirmCancelBtn.removeEventListener('click', onCancel);
+      }
+      function onReconnect() { cleanup(); resolve('reconnect'); }
+      function onAlways() { cleanup(); resolve('always'); }
+      function onCancel() { cleanup(); resolve('cancel'); }
+
+      confirmReconnectBtn.addEventListener('click', onReconnect);
+      confirmAlwaysBtn.addEventListener('click', onAlways);
+      confirmCancelBtn.addEventListener('click', onCancel);
+    });
+  }
+
+  // Disconnect backend only (no WebSocket/UI cleanup, for silent reconnect)
+  async function disconnectBackend() {
+    try {
+      await fetch(API_BASE + '/api/disconnect', { method: 'POST' });
+    } catch (e) {
+      console.error('Disconnect error:', e);
+    }
+  }
+
   // Connect to serial port
   async function connect() {
     const port = portSelect.value;
@@ -164,12 +201,33 @@
     };
 
     try {
-      const res = await fetch(API_BASE + '/api/connect', {
+      var res = await fetch(API_BASE + '/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
-      const result = await res.json();
+      var result = await res.json();
+
+      if (res.status === 409) {
+        if (settings.alwaysReconnect) {
+          await disconnectBackend();
+        } else {
+          var choice = await showReconnectConfirm();
+          if (choice === 'cancel') return;
+          if (choice === 'always') {
+            settings.alwaysReconnect = true;
+            saveSettings();
+          }
+          await disconnectBackend();
+        }
+        // Retry connect after disconnect
+        res = await fetch(API_BASE + '/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        result = await res.json();
+      }
 
       if (!result.ok) {
         term.writeln('\r\n[Error] ' + result.message);
@@ -263,6 +321,11 @@
     settings.filterCuOnly = filterCuCheckbox.checked;
     saveSettings();
     refreshPorts();
+  });
+
+  alwaysReconnectCheckbox.addEventListener('change', function() {
+    settings.alwaysReconnect = alwaysReconnectCheckbox.checked;
+    saveSettings();
   });
 
   // Handle window resize

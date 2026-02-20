@@ -230,3 +230,45 @@ select:disabled, button:disabled {
   height: 16px;
   cursor: pointer;
 }
+
+/* Confirm modal */
+.confirm-message {
+  font-size: 13px;
+  color: #d4d4d4;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.confirm-buttons button {
+  min-width: 80px;
+  padding: 7px 14px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+#confirm-reconnect {
+  background: #0f3460;
+  border-color: #e94560;
+  color: #e94560;
+}
+#confirm-reconnect:hover { background: #e94560; color: #fff; }
+
+#confirm-always {
+  background: #0f3460;
+  border-color: #e94560;
+  color: #e94560;
+}
+#confirm-always:hover { background: #e94560; color: #fff; }
+
+#confirm-cancel {
+  background: #1a1a2e;
+  border-color: #0f3460;
+  color: #7a7a9e;
+}
+#confirm-cancel:hover { background: #1f2b4d; }
