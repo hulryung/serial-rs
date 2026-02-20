@@ -15,8 +15,9 @@ html, body {
 #toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 16px;
+  padding: 8px 12px;
   background: #16213e;
   border-bottom: 1px solid #0f3460;
   flex-shrink: 0;
@@ -32,7 +33,28 @@ html, body {
   width: 1px;
   height: 24px;
   background: #0f3460;
-  margin: 0 6px;
+  margin: 0 4px;
+}
+
+#port-select {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Responsive toolbar: hide separators and labels when narrow */
+@media (max-width: 680px) {
+  .toolbar-separator { display: none; }
+  .toolbar-label { display: none; }
+  #toolbar { gap: 4px; padding: 6px 8px; }
+  select, button { padding: 5px 6px; font-size: 12px; }
+  #connect-btn { min-width: 80px; }
+  #port-select { max-width: 160px; }
+}
+
+@media (max-width: 480px) {
+  #port-select { max-width: 120px; }
+  #status-indicator span { display: none; }
 }
 
 .toolbar-label {
