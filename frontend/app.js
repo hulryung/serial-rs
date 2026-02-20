@@ -217,6 +217,14 @@
     if (fitAddon) fitAddon.fit();
   });
 
+  // Cmd+R to reload (Tauri WebView doesn't enable browser shortcuts by default)
+  window.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+      e.preventDefault();
+      location.reload();
+    }
+  });
+
   // Initialize
   initTerminal();
   refreshPorts();
