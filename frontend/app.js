@@ -61,6 +61,57 @@
     }
   }
 
+  // Open WebSocket and attach to terminal
+  function openWebSocket(label) {
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(wsProtocol + '//' + location.host + '/ws');
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function() {
+      connected = true;
+      updateUI();
+      term.writeln('\r\n[Connected] ' + label);
+
+      attachAddon = new AttachAddon.AttachAddon(ws);
+      term.loadAddon(attachAddon);
+    };
+
+    ws.onclose = function() {
+      if (connected) {
+        connected = false;
+        updateUI();
+        term.writeln('\r\n[Disconnected]');
+      }
+    };
+
+    ws.onerror = function(e) {
+      console.error('WebSocket error:', e);
+      term.writeln('\r\n[Error] WebSocket error');
+    };
+  }
+
+  // Check backend status and reconnect if port is already open
+  async function checkAndReconnect() {
+    try {
+      var res = await fetch('/api/status');
+      var status = await res.json();
+      if (status.connected) {
+        term.writeln('\r\n[Reconnecting] ' + status.port + '...');
+        // Restore UI selections to match backend state
+        if (status.config) {
+          portSelect.value = status.config.port;
+          baudSelect.value = status.config.baud_rate;
+          databitsSelect.value = status.config.data_bits;
+          stopbitsSelect.value = status.config.stop_bits;
+          paritySelect.value = status.config.parity;
+        }
+        openWebSocket(status.port + ' @ ' + status.config.baud_rate);
+      }
+    } catch (e) {
+      // Ignore - status check is best-effort
+    }
+  }
+
   // Connect to serial port
   async function connect() {
     const port = portSelect.value;
@@ -90,34 +141,7 @@
         return;
       }
 
-      // Open WebSocket
-      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(wsProtocol + '//' + location.host + '/ws');
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = function() {
-        connected = true;
-        updateUI();
-        term.writeln('\r\n[Connected] ' + port + ' @ ' + config.baud_rate);
-
-        // Attach WebSocket to terminal
-        attachAddon = new AttachAddon.AttachAddon(ws);
-        term.loadAddon(attachAddon);
-      };
-
-      ws.onclose = function() {
-        if (connected) {
-          connected = false;
-          updateUI();
-          term.writeln('\r\n[Disconnected]');
-        }
-      };
-
-      ws.onerror = function(e) {
-        console.error('WebSocket error:', e);
-        term.writeln('\r\n[Error] WebSocket error');
-      };
-
+      openWebSocket(port + ' @ ' + config.baud_rate);
     } catch (e) {
       console.error('Connect failed:', e);
       term.writeln('\r\n[Error] Connection failed: ' + e.message);
@@ -191,4 +215,5 @@
   // Initialize
   initTerminal();
   refreshPorts();
+  checkAndReconnect();
 })();
