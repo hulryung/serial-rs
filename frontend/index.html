@@ -53,11 +53,13 @@
       <div class="toolbar-separator"></div>
 
       <button id="connect-btn">Connect</button>
-      <span id="status-indicator" class="disconnected">Disconnected</span>
     </div>
     <div id="terminal-container"></div>
     <div id="statusbar">
-      <span id="statusbar-port">No connection</span>
+      <span id="statusbar-left">
+        <span id="status-indicator" class="disconnected">Disconnected</span>
+        <span id="statusbar-port"></span>
+      </span>
       <span id="statusbar-right">serial-rs</span>
     </div>
   </div>

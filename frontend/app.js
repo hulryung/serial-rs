@@ -181,7 +181,7 @@
       connectBtn.classList.add('connected');
       statusIndicator.textContent = 'Connected';
       statusIndicator.className = 'connected';
-      statusbarPort.textContent = portSelect.value + ' @ ' + baudSelect.value;
+      statusbarPort.textContent = '— ' + portSelect.value + ' @ ' + baudSelect.value;
       portSelect.disabled = true;
       baudSelect.disabled = true;
       databitsSelect.disabled = true;
@@ -192,7 +192,7 @@
       connectBtn.classList.remove('connected');
       statusIndicator.textContent = 'Disconnected';
       statusIndicator.className = 'disconnected';
-      statusbarPort.textContent = 'No connection';
+      statusbarPort.textContent = '';
       portSelect.disabled = false;
       baudSelect.disabled = false;
       databitsSelect.disabled = false;

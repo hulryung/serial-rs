@@ -109,7 +109,6 @@ select:disabled, button:disabled {
 
 /* Status indicator */
 #status-indicator {
-  margin-left: auto;
   font-size: 12px;
   font-weight: 500;
   display: flex;
@@ -151,4 +150,10 @@ select:disabled, button:disabled {
   font-size: 12px;
   color: #7a7a9e;
   flex-shrink: 0;
+}
+
+#statusbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
