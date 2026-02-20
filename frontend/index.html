@@ -93,6 +93,28 @@
               <span>Always reconnect (skip confirmation)</span>
             </label>
           </div>
+          <div class="settings-section">
+            <h3>Server</h3>
+            <div class="settings-option">
+              <label class="server-toggle">
+                <input type="checkbox" id="setting-server-enabled">
+                <span>Enable remote access</span>
+              </label>
+            </div>
+            <div id="server-details" class="server-details hidden">
+              <div class="settings-field">
+                <label>Auth Token</label>
+                <div class="token-field">
+                  <input type="text" id="setting-auth-token" readonly>
+                  <button id="copy-token-btn" title="Copy token">&#x1F4CB;</button>
+                  <button id="regenerate-token-btn" title="Regenerate token">&#x21bb;</button>
+                </div>
+              </div>
+              <div class="settings-field">
+                <span class="server-info" id="server-clients">Clients: 0</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

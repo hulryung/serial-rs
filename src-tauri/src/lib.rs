@@ -1,16 +1,20 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        ConnectInfo, Query, State, WebSocketUpgrade,
     },
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::Next,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -77,10 +81,80 @@ struct SerialConnection {
 
 const SCROLLBACK_MAX: usize = 128 * 1024; // 128KB
 
+struct ServerConfig {
+    enabled: bool,
+    auth_token: String,
+}
+
 struct AppState {
     serial_connection: Mutex<Option<SerialConnection>>,
     broadcast_tx: broadcast::Sender<Vec<u8>>,
     scrollback: Mutex<VecDeque<u8>>,
+    server_config: Mutex<ServerConfig>,
+    connected_clients: AtomicUsize,
+}
+
+// ---------------------------------------------------------------------------
+// Token generation
+// ---------------------------------------------------------------------------
+
+fn generate_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// ---------------------------------------------------------------------------
+
+async fn auth_middleware(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let ip = addr.ip();
+
+    // Loopback requests pass without auth (Tauri WebView compatibility)
+    if ip.is_loopback() {
+        return next.run(request).await;
+    }
+
+    let config = state.server_config.lock().await;
+
+    // Server mode OFF + external request → 403
+    if !config.enabled {
+        return (StatusCode::FORBIDDEN, "Remote access is disabled").into_response();
+    }
+
+    let expected_token = config.auth_token.clone();
+    drop(config);
+
+    // Check Authorization header: Bearer <token>
+    if let Some(auth_header) = request.headers().get("authorization") {
+        if let Ok(value) = auth_header.to_str() {
+            if let Some(token) = value.strip_prefix("Bearer ") {
+                if token == expected_token {
+                    return next.run(request).await;
+                }
+            }
+        }
+    }
+
+    // Check ?token= query parameter
+    if let Some(query) = request.uri().query() {
+        for pair in query.split('&') {
+            if let Some(token) = pair.strip_prefix("token=") {
+                if token == expected_token {
+                    return next.run(request).await;
+                }
+            }
+        }
+    }
+
+    (StatusCode::UNAUTHORIZED, "Invalid or missing token").into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -307,17 +381,52 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Server management endpoints
+// ---------------------------------------------------------------------------
+
+async fn server_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.server_config.lock().await;
+    let clients = state.connected_clients.load(Ordering::Relaxed);
+    Json(serde_json::json!({
+        "enabled": config.enabled,
+        "token": config.auth_token,
+        "clients": clients,
+    }))
+}
+
+async fn server_toggle(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut config = state.server_config.lock().await;
+    config.enabled = !config.enabled;
+    Json(serde_json::json!({
+        "enabled": config.enabled,
+        "token": config.auth_token,
+    }))
+}
+
+async fn server_regenerate_token(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut config = state.server_config.lock().await;
+    config.auth_token = generate_token();
+    Json(serde_json::json!({
+        "token": config.auth_token,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    // Auth already handled by middleware (loopback passes, external tokens verified)
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
+    state.connected_clients.fetch_add(1, Ordering::Relaxed);
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send scrollback buffer first so client sees previous output
@@ -326,6 +435,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         if !sb.is_empty() {
             let data: Vec<u8> = sb.iter().copied().collect();
             if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                state.connected_clients.fetch_sub(1, Ordering::Relaxed);
                 return;
             }
         }
@@ -400,6 +510,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    state.connected_clients.fetch_sub(1, Ordering::Relaxed);
     tracing::info!("WebSocket connection closed");
 }
 
@@ -447,6 +558,11 @@ async fn start_axum_server() {
         serial_connection: Mutex::new(None),
         broadcast_tx,
         scrollback: Mutex::new(VecDeque::new()),
+        server_config: Mutex::new(ServerConfig {
+            enabled: false,
+            auth_token: generate_token(),
+        }),
+        connected_clients: AtomicUsize::new(0),
     });
 
     let cors = CorsLayer::very_permissive();
@@ -456,18 +572,22 @@ async fn start_axum_server() {
         .route("/api/connect", post(connect))
         .route("/api/disconnect", post(disconnect))
         .route("/api/status", get(status))
+        .route("/api/server/status", get(server_status))
+        .route("/api/server/toggle", post(server_toggle))
+        .route("/api/server/regenerate-token", post(server_regenerate_token))
         .route("/ws", get(ws_handler))
-        .with_state(state)
+        .with_state(state.clone())
         .fallback(static_handler)
+        .layer(axum::middleware::from_fn_with_state(state, auth_middleware))
         .layer(cors);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
-        .expect("Failed to bind to 127.0.0.1:3000");
+        .expect("Failed to bind to 0.0.0.0:3000");
 
-    tracing::info!("Axum server listening on http://127.0.0.1:3000");
+    tracing::info!("Axum server listening on http://0.0.0.0:3000");
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("Server error");
 }

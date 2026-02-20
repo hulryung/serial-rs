@@ -272,3 +272,76 @@ select:disabled, button:disabled {
   color: #7a7a9e;
 }
 #confirm-cancel:hover { background: #1f2b4d; }
+
+/* Server settings section */
+.server-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #d4d4d4;
+  cursor: pointer;
+}
+
+.server-toggle input[type="checkbox"] {
+  accent-color: #e94560;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.server-details {
+  margin-top: 10px;
+}
+
+.server-details.hidden {
+  display: none;
+}
+
+.settings-field {
+  margin-bottom: 10px;
+}
+
+.settings-field > label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7a7a9e;
+  margin-bottom: 6px;
+}
+
+.token-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.token-field input {
+  flex: 1;
+  background: #1a1a2e;
+  color: #d4d4d4;
+  border: 1px solid #0f3460;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  outline: none;
+}
+
+.token-field button {
+  padding: 5px 8px;
+  font-size: 14px;
+  min-width: unset;
+}
+
+.server-info {
+  font-size: 12px;
+  color: #7a7a9e;
+}
+
+.settings-section + .settings-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #0f3460;
+}
