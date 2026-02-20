@@ -22,9 +22,10 @@
     term = new Terminal({
       cursorBlink: true,
       theme: {
-        background: '#1e1e1e',
+        background: '#1a1a2e',
         foreground: '#d4d4d4',
-        cursor: '#d4d4d4',
+        cursor: '#e94560',
+        selectionBackground: '#0f3460',
       },
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',

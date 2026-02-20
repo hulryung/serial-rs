@@ -10,44 +10,49 @@
 <body>
   <div id="app">
     <div id="toolbar">
-      <!-- Port selector -->
-      <select id="port-select"><option value="">Select Port...</option></select>
-      <button id="refresh-btn" title="Refresh ports">&#x21bb;</button>
+      <div class="toolbar-group">
+        <span class="toolbar-label">Port</span>
+        <select id="port-select"><option value="">Select Port...</option></select>
+        <button id="refresh-btn" title="Refresh ports">&#x21bb;</button>
+      </div>
 
-      <!-- Baud rate -->
-      <select id="baud-select">
-        <option value="9600">9600</option>
-        <option value="19200">19200</option>
-        <option value="38400">38400</option>
-        <option value="57600">57600</option>
-        <option value="115200" selected>115200</option>
-      </select>
+      <div class="toolbar-separator"></div>
 
-      <!-- Data bits -->
-      <select id="databits-select">
-        <option value="8" selected>8 bit</option>
-        <option value="7">7 bit</option>
-        <option value="6">6 bit</option>
-        <option value="5">5 bit</option>
-      </select>
+      <div class="toolbar-group">
+        <span class="toolbar-label">Baud</span>
+        <select id="baud-select">
+          <option value="9600">9600</option>
+          <option value="19200">19200</option>
+          <option value="38400">38400</option>
+          <option value="57600">57600</option>
+          <option value="115200" selected>115200</option>
+        </select>
+      </div>
 
-      <!-- Stop bits -->
-      <select id="stopbits-select">
-        <option value="1" selected>1 stop</option>
-        <option value="2">2 stop</option>
-      </select>
+      <div class="toolbar-separator"></div>
 
-      <!-- Parity -->
-      <select id="parity-select">
-        <option value="none" selected>No Parity</option>
-        <option value="odd">Odd</option>
-        <option value="even">Even</option>
-      </select>
+      <div class="toolbar-group">
+        <span class="toolbar-label">Config</span>
+        <select id="databits-select">
+          <option value="8" selected>8 bit</option>
+          <option value="7">7 bit</option>
+          <option value="6">6 bit</option>
+          <option value="5">5 bit</option>
+        </select>
+        <select id="stopbits-select">
+          <option value="1" selected>1 stop</option>
+          <option value="2">2 stop</option>
+        </select>
+        <select id="parity-select">
+          <option value="none" selected>No Parity</option>
+          <option value="odd">Odd</option>
+          <option value="even">Even</option>
+        </select>
+      </div>
 
-      <!-- Connect/Disconnect -->
+      <div class="toolbar-separator"></div>
+
       <button id="connect-btn">Connect</button>
-
-      <!-- Status -->
       <span id="status-indicator" class="disconnected">Disconnected</span>
     </div>
     <div id="terminal-container"></div>
