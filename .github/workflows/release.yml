@@ -63,7 +63,7 @@ jobs:
 
       - name: Rename DMG (replace spaces with hyphens)
         run: |
-          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          DMG_DIR="target/${{ matrix.target }}/release/bundle/dmg"
           for f in "$DMG_DIR"/*.dmg; do
             NEW_NAME=$(echo "$f" | sed 's/ /-/g')
             if [ "$f" != "$NEW_NAME" ]; then
@@ -75,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dmg-${{ matrix.arch }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
 
   create-release:
     needs: build-macos
