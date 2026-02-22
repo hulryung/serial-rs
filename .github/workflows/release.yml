@@ -25,10 +25,40 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Import Apple certificate
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "" $KEYCHAIN_PATH
+          security set-keychain-settings $KEYCHAIN_PATH
+          security unlock-keychain -p "" $KEYCHAIN_PATH
+          echo "$CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -k $KEYCHAIN_PATH \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "" $KEYCHAIN_PATH
+          security list-keychains -d user -s $KEYCHAIN_PATH
+
+      - name: Write App Store Connect API key
+        env:
+          API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$API_KEY_CONTENT" > ~/private_keys/AuthKey_${API_KEY_ID}.p8
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
 
-      - name: Build DMG
+      - name: Build DMG (signed + notarized)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
         run: cargo tauri build --target ${{ matrix.target }} --bundles dmg
 
       - name: Rename DMG (replace spaces with hyphens)
@@ -121,13 +151,6 @@ jobs:
             homepage "https://github.com/hulryung/serial-rs"
 
             app "Serial Terminal.app"
-
-            caveats <<~EOS
-              This app is not signed with an Apple Developer ID certificate.
-              On first launch, you may need to allow it in:
-                System Settings > Privacy & Security
-              Or run: xattr -cr "/Applications/Serial Terminal.app"
-            EOS
 
             zap trash: [
               "~/Library/Application Support/com.serialrs.terminal",

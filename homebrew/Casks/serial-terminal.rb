@@ -15,13 +15,6 @@ cask "serial-terminal" do
 
   app "Serial Terminal.app"
 
-  caveats <<~EOS
-    This app is not signed with an Apple Developer ID certificate.
-    On first launch, you may need to allow it in:
-      System Settings > Privacy & Security
-    Or run: xattr -cr "/Applications/Serial Terminal.app"
-  EOS
-
   zap trash: [
     "~/Library/Application Support/com.serialrs.terminal",
     "~/Library/Caches/com.serialrs.terminal",
