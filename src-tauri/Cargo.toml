@@ -2,6 +2,10 @@
 name = "serial-rs"
 version = "0.1.0"
 edition = "2021"
+description = "A modern serial terminal app built with Tauri"
+homepage = "https://github.com/hulryung/serial-rs"
+repository = "https://github.com/hulryung/serial-rs"
+license = "MIT"
 
 [lib]
 name = "serial_rs_lib"

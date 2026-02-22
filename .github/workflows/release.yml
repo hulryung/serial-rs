@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            arch: arm64
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Build DMG
+        run: cargo tauri build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Rename DMG (replace spaces with hyphens)
+        run: |
+          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          for f in "$DMG_DIR"/*.dmg; do
+            NEW_NAME=$(echo "$f" | sed 's/ /-/g')
+            if [ "$f" != "$NEW_NAME" ]; then
+              mv "$f" "$NEW_NAME"
+            fi
+          done
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+  create-release:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256_arm64: ${{ steps.checksums.outputs.sha256_arm64 }}
+      sha256_x64: ${{ steps.checksums.outputs.sha256_x64 }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all DMG artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        id: checksums
+        run: |
+          mkdir -p release
+          cp artifacts/dmg-arm64/*.dmg release/
+          cp artifacts/dmg-x64/*.dmg release/
+
+          ARM64_SHA=$(sha256sum artifacts/dmg-arm64/*.dmg | awk '{print $1}')
+          X64_SHA=$(sha256sum artifacts/dmg-x64/*.dmg | awk '{print $1}')
+
+          cd release
+          sha256sum *.dmg > checksums.txt
+          cat checksums.txt
+
+          echo "sha256_arm64=$ARM64_SHA" >> "$GITHUB_OUTPUT"
+          echo "sha256_x64=$X64_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
+
+  update-homebrew:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          SHA256_ARM64: ${{ needs.create-release.outputs.sha256_arm64 }}
+          SHA256_X64: ${{ needs.create-release.outputs.sha256_x64 }}
+        run: |
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/hulryung/homebrew-tap.git tap
+          cd tap
+          mkdir -p Casks
+
+          cat > Casks/serial-terminal.rb << EOF
+          cask "serial-terminal" do
+            version "${VERSION}"
+
+            if Hardware::CPU.arm?
+              url "https://github.com/hulryung/serial-rs/releases/download/v#{version}/Serial-Terminal_#{version}_aarch64.dmg"
+              sha256 "${SHA256_ARM64}"
+            else
+              url "https://github.com/hulryung/serial-rs/releases/download/v#{version}/Serial-Terminal_#{version}_x64.dmg"
+              sha256 "${SHA256_X64}"
+            end
+
+            name "Serial Terminal"
+            desc "A modern serial terminal app"
+            homepage "https://github.com/hulryung/serial-rs"
+
+            app "Serial Terminal.app"
+
+            caveats <<~EOS
+              This app is not signed with an Apple Developer ID certificate.
+              On first launch, you may need to allow it in:
+                System Settings > Privacy & Security
+              Or run: xattr -cr "/Applications/Serial Terminal.app"
+            EOS
+
+            zap trash: [
+              "~/Library/Application Support/com.serialrs.terminal",
+              "~/Library/Caches/com.serialrs.terminal",
+              "~/Library/Preferences/com.serialrs.terminal.plist",
+            ]
+          end
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/serial-terminal.rb
+          git commit -m "Update serial-terminal to ${VERSION}"
+          git push
