@@ -3,14 +3,29 @@
   const API_BASE = 'http://localhost:3000';
   const WS_BASE = 'ws://localhost:3000';
 
-  // DOM elements
+  // DOM elements - Serial
   const portSelect = document.getElementById('port-select');
   const baudSelect = document.getElementById('baud-select');
   const databitsSelect = document.getElementById('databits-select');
   const stopbitsSelect = document.getElementById('stopbits-select');
   const paritySelect = document.getElementById('parity-select');
-  const connectBtn = document.getElementById('connect-btn');
   const refreshBtn = document.getElementById('refresh-btn');
+
+  // DOM elements - SSH
+  const sshHostInput = document.getElementById('ssh-host');
+  const sshPortInput = document.getElementById('ssh-port');
+  const sshUsernameInput = document.getElementById('ssh-username');
+  const sshPasswordInput = document.getElementById('ssh-password');
+
+  // DOM elements - Config wrappers
+  const serialConfig = document.getElementById('serial-config');
+  const sshConfig = document.getElementById('ssh-config');
+
+  // DOM elements - Mode tabs
+  const modeTabs = document.querySelectorAll('.mode-tab');
+
+  // DOM elements - Shared
+  const connectBtn = document.getElementById('connect-btn');
   const statusIndicator = document.getElementById('status-indicator');
   const terminalContainer = document.getElementById('terminal-container');
   const statusbarPort = document.getElementById('statusbar-port');
@@ -19,6 +34,7 @@
   const settingsModal = document.getElementById('settings-modal');
   const settingsCloseBtn = document.getElementById('settings-close-btn');
   const filterCuCheckbox = document.getElementById('setting-filter-cu');
+  const rememberSshCheckbox = document.getElementById('setting-remember-ssh');
 
   const alwaysReconnectCheckbox = document.getElementById('setting-always-reconnect');
   const confirmModal = document.getElementById('confirm-modal');
@@ -27,20 +43,21 @@
   const confirmCancelBtn = document.getElementById('confirm-cancel');
 
   // State
-  let term = null;
-  let ws = null;
-  let attachAddon = null;
-  let fitAddon = null;
-  let connected = false;
-  let settings = loadSettings();
+  var term = null;
+  var ws = null;
+  var attachAddon = null;
+  var fitAddon = null;
+  var connected = false;
+  var currentMode = 'serial'; // 'serial' or 'ssh'
+  var settings = loadSettings();
 
   // Settings management
   function loadSettings() {
     try {
       var saved = JSON.parse(localStorage.getItem('serial-rs-settings'));
-      return Object.assign({ filterCuOnly: true, alwaysReconnect: false }, saved);
+      return Object.assign({ filterCuOnly: true, alwaysReconnect: false, rememberSsh: true }, saved);
     } catch (e) {
-      return { filterCuOnly: true, alwaysReconnect: false };
+      return { filterCuOnly: true, alwaysReconnect: false, rememberSsh: true };
     }
   }
 
@@ -51,6 +68,53 @@
   function applySettingsToUI() {
     filterCuCheckbox.checked = settings.filterCuOnly;
     alwaysReconnectCheckbox.checked = settings.alwaysReconnect;
+    rememberSshCheckbox.checked = settings.rememberSsh;
+  }
+
+  // SSH connection info persistence (password excluded)
+  function loadSshInfo() {
+    try {
+      return JSON.parse(localStorage.getItem('serial-rs-ssh-info')) || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveSshInfo() {
+    if (!settings.rememberSsh) return;
+    var info = {
+      host: sshHostInput.value,
+      port: parseInt(sshPortInput.value) || 22,
+      username: sshUsernameInput.value
+    };
+    localStorage.setItem('serial-rs-ssh-info', JSON.stringify(info));
+  }
+
+  function applySshInfo() {
+    var info = loadSshInfo();
+    if (info.host) sshHostInput.value = info.host;
+    if (info.port) sshPortInput.value = info.port;
+    if (info.username) sshUsernameInput.value = info.username;
+  }
+
+  // Mode tab switching
+  function switchMode(mode) {
+    currentMode = mode;
+    modeTabs.forEach(function(tab) {
+      if (tab.getAttribute('data-mode') === mode) {
+        tab.classList.add('active');
+      } else {
+        tab.classList.remove('active');
+      }
+    });
+
+    if (mode === 'serial') {
+      serialConfig.classList.remove('hidden');
+      sshConfig.classList.add('hidden');
+    } else {
+      serialConfig.classList.add('hidden');
+      sshConfig.classList.remove('hidden');
+    }
   }
 
   // Initialize xterm.js terminal
@@ -74,6 +138,13 @@
 
     term.writeln('Serial Terminal Ready.');
     term.writeln('Select a port and click Connect.');
+
+    // Send resize events over WebSocket
+    term.onResize(function(size) {
+      if (ws && ws.readyState === WebSocket.OPEN && currentMode === 'ssh') {
+        ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+      }
+    });
   }
 
   // Fetch available ports
@@ -116,6 +187,11 @@
 
       attachAddon = new AttachAddon.AttachAddon(ws);
       term.loadAddon(attachAddon);
+
+      // Send initial size for SSH
+      if (currentMode === 'ssh') {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
     };
 
     ws.onclose = function() {
@@ -138,16 +214,31 @@
       var res = await fetch(API_BASE + '/api/status');
       var status = await res.json();
       if (status.connected) {
-        term.writeln('\r\n[Reconnecting] ' + status.port + '...');
-        // Restore UI selections to match backend state
-        if (status.config) {
-          portSelect.value = status.config.port;
-          baudSelect.value = status.config.baud_rate;
-          databitsSelect.value = status.config.data_bits;
-          stopbitsSelect.value = status.config.stop_bits;
-          paritySelect.value = status.config.parity;
+        if (status.connection_type === 'ssh') {
+          currentMode = 'ssh';
+          switchMode('ssh');
+          var sshLabel = 'SSH ' + (status.ssh_config ? status.ssh_config.username + '@' + status.ssh_config.host + ':' + status.ssh_config.port : '');
+          term.writeln('\r\n[Reconnecting] ' + sshLabel + '...');
+          if (status.ssh_config) {
+            sshHostInput.value = status.ssh_config.host;
+            sshPortInput.value = status.ssh_config.port;
+            sshUsernameInput.value = status.ssh_config.username;
+          }
+          openWebSocket(sshLabel);
+        } else {
+          currentMode = 'serial';
+          switchMode('serial');
+          term.writeln('\r\n[Reconnecting] ' + status.port + '...');
+          // Restore UI selections to match backend state
+          if (status.config) {
+            portSelect.value = status.config.port;
+            baudSelect.value = status.config.baud_rate;
+            databitsSelect.value = status.config.data_bits;
+            stopbitsSelect.value = status.config.stop_bits;
+            paritySelect.value = status.config.parity;
+          }
+          openWebSocket(status.port + ' @ ' + status.config.baud_rate);
         }
-        openWebSocket(status.port + ' @ ' + status.config.baud_rate);
       }
     } catch (e) {
       // Ignore - status check is best-effort
@@ -184,15 +275,31 @@
     }
   }
 
+  // Handle 409 conflict (already connected)
+  async function handleConflict() {
+    if (settings.alwaysReconnect) {
+      await disconnectBackend();
+    } else {
+      var choice = await showReconnectConfirm();
+      if (choice === 'cancel') return false;
+      if (choice === 'always') {
+        settings.alwaysReconnect = true;
+        saveSettings();
+      }
+      await disconnectBackend();
+    }
+    return true;
+  }
+
   // Connect to serial port
-  async function connect() {
-    const port = portSelect.value;
+  async function connectSerial() {
+    var port = portSelect.value;
     if (!port) {
       term.writeln('\r\n[Error] Please select a port');
       return;
     }
 
-    const config = {
+    var config = {
       port: port,
       baud_rate: parseInt(baudSelect.value),
       data_bits: parseInt(databitsSelect.value),
@@ -209,17 +316,8 @@
       var result = await res.json();
 
       if (res.status === 409) {
-        if (settings.alwaysReconnect) {
-          await disconnectBackend();
-        } else {
-          var choice = await showReconnectConfirm();
-          if (choice === 'cancel') return;
-          if (choice === 'always') {
-            settings.alwaysReconnect = true;
-            saveSettings();
-          }
-          await disconnectBackend();
-        }
+        var ok = await handleConflict();
+        if (!ok) return;
         // Retry connect after disconnect
         res = await fetch(API_BASE + '/api/connect', {
           method: 'POST',
@@ -238,6 +336,74 @@
     } catch (e) {
       console.error('Connect failed:', e);
       term.writeln('\r\n[Error] Connection failed: ' + e.message);
+    }
+  }
+
+  // Connect via SSH
+  async function connectSsh() {
+    var host = sshHostInput.value.trim();
+    var port = parseInt(sshPortInput.value) || 22;
+    var username = sshUsernameInput.value.trim();
+    var password = sshPasswordInput.value;
+
+    if (!host) {
+      term.writeln('\r\n[Error] Please enter a host');
+      return;
+    }
+    if (!username) {
+      term.writeln('\r\n[Error] Please enter a username');
+      return;
+    }
+
+    var sshConfig = {
+      host: host,
+      port: port,
+      username: username,
+      password: password
+    };
+
+    try {
+      var res = await fetch(API_BASE + '/api/ssh/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sshConfig),
+      });
+      var result = await res.json();
+
+      if (res.status === 409) {
+        var ok = await handleConflict();
+        if (!ok) return;
+        // Retry connect after disconnect
+        res = await fetch(API_BASE + '/api/ssh/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sshConfig),
+        });
+        result = await res.json();
+      }
+
+      if (!result.ok) {
+        term.writeln('\r\n[Error] ' + result.message);
+        return;
+      }
+
+      // Save SSH info (password excluded)
+      saveSshInfo();
+
+      var label = 'SSH ' + username + '@' + host + ':' + port;
+      openWebSocket(label);
+    } catch (e) {
+      console.error('SSH connect failed:', e);
+      term.writeln('\r\n[Error] SSH connection failed: ' + e.message);
+    }
+  }
+
+  // Connect dispatcher
+  function connect() {
+    if (currentMode === 'serial') {
+      connectSerial();
+    } else {
+      connectSsh();
     }
   }
 
@@ -274,25 +440,53 @@
       connectBtn.classList.add('connected');
       statusIndicator.textContent = 'Connected';
       statusIndicator.className = 'connected';
-      statusbarPort.textContent = '— ' + portSelect.value + ' @ ' + baudSelect.value;
-      portSelect.disabled = true;
-      baudSelect.disabled = true;
-      databitsSelect.disabled = true;
-      stopbitsSelect.disabled = true;
-      paritySelect.disabled = true;
+
+      if (currentMode === 'serial') {
+        statusbarPort.textContent = '— ' + portSelect.value + ' @ ' + baudSelect.value;
+        portSelect.disabled = true;
+        baudSelect.disabled = true;
+        databitsSelect.disabled = true;
+        stopbitsSelect.disabled = true;
+        paritySelect.disabled = true;
+      } else {
+        statusbarPort.textContent = '— SSH ' + sshUsernameInput.value + '@' + sshHostInput.value + ':' + sshPortInput.value;
+        sshHostInput.disabled = true;
+        sshPortInput.disabled = true;
+        sshUsernameInput.disabled = true;
+        sshPasswordInput.disabled = true;
+      }
+
+      // Disable mode tabs while connected
+      modeTabs.forEach(function(tab) { tab.disabled = true; });
     } else {
       connectBtn.textContent = 'Connect';
       connectBtn.classList.remove('connected');
       statusIndicator.textContent = 'Disconnected';
       statusIndicator.className = 'disconnected';
       statusbarPort.textContent = '';
+
       portSelect.disabled = false;
       baudSelect.disabled = false;
       databitsSelect.disabled = false;
       stopbitsSelect.disabled = false;
       paritySelect.disabled = false;
+      sshHostInput.disabled = false;
+      sshPortInput.disabled = false;
+      sshUsernameInput.disabled = false;
+      sshPasswordInput.disabled = false;
+
+      // Re-enable mode tabs
+      modeTabs.forEach(function(tab) { tab.disabled = false; });
     }
   }
+
+  // Event listeners - Mode tabs
+  modeTabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      if (connected) return;
+      switchMode(tab.getAttribute('data-mode'));
+    });
+  });
 
   // Event listeners
   connectBtn.addEventListener('click', function() {
@@ -328,6 +522,14 @@
     saveSettings();
   });
 
+  rememberSshCheckbox.addEventListener('change', function() {
+    settings.rememberSsh = rememberSshCheckbox.checked;
+    saveSettings();
+    if (!settings.rememberSsh) {
+      localStorage.removeItem('serial-rs-ssh-info');
+    }
+  });
+
   // Handle window resize
   window.addEventListener('resize', function() {
     if (fitAddon) fitAddon.fit();
@@ -343,6 +545,7 @@
 
   // Initialize
   applySettingsToUI();
+  applySshInfo();
   initTerminal();
   refreshPorts();
   checkAndReconnect();

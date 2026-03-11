@@ -1,3 +1,5 @@
+mod ssh;
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -57,10 +59,19 @@ struct ApiResponse {
 }
 
 #[derive(Serialize)]
+struct SshStatusConfig {
+    host: String,
+    port: u16,
+    username: String,
+}
+
+#[derive(Serialize)]
 struct StatusResponse {
     connected: bool,
+    connection_type: Option<String>,
     port: Option<String>,
     config: Option<PortConfig>,
+    ssh_config: Option<SshStatusConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,10 +88,15 @@ struct SerialConnection {
 
 const SCROLLBACK_MAX: usize = 128 * 1024; // 128KB
 
+enum ConnectionKind {
+    Serial(SerialConnection),
+    Ssh(ssh::SshConnection),
+}
+
 struct AppState {
-    serial_connection: Mutex<Option<SerialConnection>>,
+    connection: Mutex<Option<ConnectionKind>>,
     broadcast_tx: broadcast::Sender<Vec<u8>>,
-    scrollback: Mutex<VecDeque<u8>>,
+    scrollback: Arc<Mutex<VecDeque<u8>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +178,7 @@ async fn connect(
     // Clear scrollback for new connection
     state.scrollback.lock().await.clear();
 
-    let mut conn = state.serial_connection.lock().await;
+    let mut conn = state.connection.lock().await;
 
     if conn.is_some() {
         return (
@@ -246,13 +262,13 @@ async fn connect(
     });
 
     let port_name = config.port.clone();
-    *conn = Some(SerialConnection {
+    *conn = Some(ConnectionKind::Serial(SerialConnection {
         port_name: port_name.clone(),
         config,
         tx_to_serial,
         reader_handle,
         writer_handle,
-    });
+    }));
 
     (
         StatusCode::OK,
@@ -264,11 +280,11 @@ async fn connect(
 }
 
 async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut conn = state.serial_connection.lock().await;
+    let mut conn = state.connection.lock().await;
 
     match conn.take() {
-        Some(c) => {
-            tracing::info!("Disconnecting from {}", c.port_name);
+        Some(ConnectionKind::Serial(c)) => {
+            tracing::info!("Disconnecting from serial {}", c.port_name);
             c.reader_handle.abort();
             c.writer_handle.abort();
             state.scrollback.lock().await.clear();
@@ -277,6 +293,19 @@ async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 Json(ApiResponse {
                     ok: true,
                     message: format!("Disconnected from {}", c.port_name),
+                }),
+            )
+        }
+        Some(ConnectionKind::Ssh(c)) => {
+            let host = c.config.host.clone();
+            tracing::info!("Disconnecting from SSH {}", host);
+            c.disconnect().await;
+            state.scrollback.lock().await.clear();
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    ok: true,
+                    message: format!("Disconnected from SSH {}", host),
                 }),
             )
         }
@@ -290,18 +319,84 @@ async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
+async fn ssh_connect(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<ssh::SshConfig>,
+) -> impl IntoResponse {
+    state.scrollback.lock().await.clear();
+
+    let mut conn = state.connection.lock().await;
+
+    if conn.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse {
+                ok: false,
+                message: "Already connected. Disconnect first.".to_string(),
+            }),
+        );
+    }
+
+    let host = format!("{}:{}", config.host, config.port);
+
+    match ssh::SshConnection::connect(
+        config,
+        state.broadcast_tx.clone(),
+        state.scrollback.clone(),
+        SCROLLBACK_MAX,
+    )
+    .await
+    {
+        Ok(ssh_conn) => {
+            *conn = Some(ConnectionKind::Ssh(ssh_conn));
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    ok: true,
+                    message: format!("Connected to SSH {}", host),
+                }),
+            )
+        }
+        Err(e) => {
+            tracing::error!("SSH connection failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    ok: false,
+                    message: e,
+                }),
+            )
+        }
+    }
+}
+
 async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let conn = state.serial_connection.lock().await;
+    let conn = state.connection.lock().await;
     match conn.as_ref() {
-        Some(c) => Json(StatusResponse {
+        Some(ConnectionKind::Serial(c)) => Json(StatusResponse {
             connected: true,
+            connection_type: Some("serial".to_string()),
             port: Some(c.port_name.clone()),
             config: Some(c.config.clone()),
+            ssh_config: None,
+        }),
+        Some(ConnectionKind::Ssh(c)) => Json(StatusResponse {
+            connected: true,
+            connection_type: Some("ssh".to_string()),
+            port: Some(format!("ssh://{}:{}", c.config.host, c.config.port)),
+            config: None,
+            ssh_config: Some(SshStatusConfig {
+                host: c.config.host.clone(),
+                port: c.config.port,
+                username: c.config.username.clone(),
+            }),
         }),
         None => Json(StatusResponse {
             connected: false,
+            connection_type: None,
             port: None,
             config: None,
+            ssh_config: None,
         }),
     }
 }
@@ -334,12 +429,28 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     // Subscribe to broadcast for serial RX data
     let mut broadcast_rx = state.broadcast_tx.subscribe();
 
-    // Get a clone of the mpsc sender for writing to serial (if connected)
-    let get_serial_tx = |state: &Arc<AppState>| {
+    // Get a clone of the mpsc sender for writing (serial or SSH)
+    let get_write_tx = |state: &Arc<AppState>| {
         let state = state.clone();
         async move {
-            let conn = state.serial_connection.lock().await;
-            conn.as_ref().map(|c| c.tx_to_serial.clone())
+            let conn = state.connection.lock().await;
+            match conn.as_ref() {
+                Some(ConnectionKind::Serial(c)) => Some(c.tx_to_serial.clone()),
+                Some(ConnectionKind::Ssh(c)) => Some(c.tx_to_ssh.clone()),
+                None => None,
+            }
+        }
+    };
+
+    // Get the resize sender for SSH connections
+    let get_resize_tx = |state: &Arc<AppState>| {
+        let state = state.clone();
+        async move {
+            let conn = state.connection.lock().await;
+            match conn.as_ref() {
+                Some(ConnectionKind::Ssh(c)) => Some(c.resize_tx.clone()),
+                _ => None,
+            }
         }
     };
 
@@ -368,7 +479,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    if let Some(tx) = get_serial_tx(&state_clone).await {
+                    if let Some(tx) = get_write_tx(&state_clone).await {
                         if tx.send(data.to_vec()).await.is_err() {
                             tracing::error!("Failed to send data to serial writer");
                             break;
@@ -376,8 +487,22 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
                 Message::Text(text) => {
-                    // Also support text frames (terminal may send text)
-                    if let Some(tx) = get_serial_tx(&state_clone).await {
+                    // Try to parse as a resize command
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if val.get("type").and_then(|v| v.as_str()) == Some("resize") {
+                            if let (Some(cols), Some(rows)) = (
+                                val.get("cols").and_then(|v| v.as_u64()),
+                                val.get("rows").and_then(|v| v.as_u64()),
+                            ) {
+                                if let Some(resize_tx) = get_resize_tx(&state_clone).await {
+                                    let _ = resize_tx.send((cols as u32, rows as u32)).await;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    // Not a resize message — forward as data
+                    if let Some(tx) = get_write_tx(&state_clone).await {
                         if tx.send(text.as_bytes().to_vec()).await.is_err() {
                             tracing::error!("Failed to send data to serial writer");
                             break;
@@ -444,9 +569,9 @@ async fn start_axum_server() {
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(1024);
 
     let state = Arc::new(AppState {
-        serial_connection: Mutex::new(None),
+        connection: Mutex::new(None),
         broadcast_tx,
-        scrollback: Mutex::new(VecDeque::new()),
+        scrollback: Arc::new(Mutex::new(VecDeque::new())),
     });
 
     let cors = CorsLayer::very_permissive();
@@ -455,6 +580,7 @@ async fn start_axum_server() {
         .route("/api/ports", get(list_ports))
         .route("/api/connect", post(connect))
         .route("/api/disconnect", post(disconnect))
+        .route("/api/ssh/connect", post(ssh_connect))
         .route("/api/status", get(status))
         .route("/ws", get(ws_handler))
         .with_state(state)

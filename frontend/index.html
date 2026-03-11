@@ -9,45 +9,79 @@
 </head>
 <body>
   <div id="app">
+    <div id="mode-tabs">
+      <button class="mode-tab active" data-mode="serial">Serial</button>
+      <button class="mode-tab" data-mode="ssh">SSH</button>
+    </div>
     <div id="toolbar">
-      <div class="toolbar-group">
-        <span class="toolbar-label">Port</span>
-        <select id="port-select"><option value="">Select Port...</option></select>
-        <button id="refresh-btn" title="Refresh ports">&#x21bb;</button>
+      <div id="serial-config">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Port</span>
+          <select id="port-select"><option value="">Select Port...</option></select>
+          <button id="refresh-btn" title="Refresh ports">&#x21bb;</button>
+        </div>
+
+        <div class="toolbar-separator"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">Baud</span>
+          <select id="baud-select">
+            <option value="9600">9600</option>
+            <option value="19200">19200</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="115200" selected>115200</option>
+          </select>
+        </div>
+
+        <div class="toolbar-separator"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">Config</span>
+          <select id="databits-select">
+            <option value="8" selected>8 bit</option>
+            <option value="7">7 bit</option>
+            <option value="6">6 bit</option>
+            <option value="5">5 bit</option>
+          </select>
+          <select id="stopbits-select">
+            <option value="1" selected>1 stop</option>
+            <option value="2">2 stop</option>
+          </select>
+          <select id="parity-select">
+            <option value="none" selected>No Parity</option>
+            <option value="odd">Odd</option>
+            <option value="even">Even</option>
+          </select>
+        </div>
       </div>
 
-      <div class="toolbar-separator"></div>
+      <div id="ssh-config" class="hidden">
+        <div class="toolbar-group">
+          <span class="toolbar-label">Host</span>
+          <input type="text" id="ssh-host" placeholder="hostname or IP">
+        </div>
 
-      <div class="toolbar-group">
-        <span class="toolbar-label">Baud</span>
-        <select id="baud-select">
-          <option value="9600">9600</option>
-          <option value="19200">19200</option>
-          <option value="38400">38400</option>
-          <option value="57600">57600</option>
-          <option value="115200" selected>115200</option>
-        </select>
-      </div>
+        <div class="toolbar-separator"></div>
 
-      <div class="toolbar-separator"></div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">Port</span>
+          <input type="number" id="ssh-port" value="22" class="ssh-port-input">
+        </div>
 
-      <div class="toolbar-group">
-        <span class="toolbar-label">Config</span>
-        <select id="databits-select">
-          <option value="8" selected>8 bit</option>
-          <option value="7">7 bit</option>
-          <option value="6">6 bit</option>
-          <option value="5">5 bit</option>
-        </select>
-        <select id="stopbits-select">
-          <option value="1" selected>1 stop</option>
-          <option value="2">2 stop</option>
-        </select>
-        <select id="parity-select">
-          <option value="none" selected>No Parity</option>
-          <option value="odd">Odd</option>
-          <option value="even">Even</option>
-        </select>
+        <div class="toolbar-separator"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">User</span>
+          <input type="text" id="ssh-username" placeholder="username">
+        </div>
+
+        <div class="toolbar-separator"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">Password</span>
+          <input type="password" id="ssh-password" placeholder="password">
+        </div>
       </div>
 
       <div class="toolbar-separator"></div>
@@ -91,6 +125,13 @@
             <label class="settings-option">
               <input type="checkbox" id="setting-always-reconnect">
               <span>Always reconnect (skip confirmation)</span>
+            </label>
+          </div>
+          <div class="settings-section settings-section-ssh">
+            <h3>SSH</h3>
+            <label class="settings-option">
+              <input type="checkbox" id="setting-remember-ssh" checked>
+              <span>Remember SSH connections</span>
             </label>
           </div>
         </div>

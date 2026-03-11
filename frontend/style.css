@@ -11,6 +11,43 @@ html, body {
 /* App layout */
 #app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
+/* Mode tabs */
+#mode-tabs {
+  display: flex;
+  padding: 6px 12px 0;
+  background: #16213e;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mode-tab {
+  padding: 5px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #0f3460;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: #1a1a2e;
+  color: #7a7a9e;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-tab:hover {
+  color: #d4d4d4;
+}
+
+.mode-tab.active {
+  background: #e94560;
+  color: #fff;
+  border-color: #e94560;
+}
+
+.mode-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Toolbar */
 #toolbar {
   display: flex;
@@ -22,6 +59,51 @@ html, body {
   border-bottom: 1px solid #0f3460;
   flex-shrink: 0;
 }
+
+/* Config wrappers */
+#serial-config, #ssh-config {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#serial-config.hidden, #ssh-config.hidden {
+  display: none;
+}
+
+/* SSH text inputs */
+#ssh-config input[type="text"],
+#ssh-config input[type="password"],
+#ssh-config input[type="number"] {
+  background: #1a1a2e;
+  color: #d4d4d4;
+  border: 1px solid #0f3460;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+#ssh-config input:hover {
+  border-color: #e94560;
+}
+
+#ssh-config input:focus {
+  border-color: #e94560;
+}
+
+#ssh-config input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#ssh-host { width: 160px; }
+#ssh-port.ssh-port-input { width: 64px; }
+#ssh-username { width: 110px; }
+#ssh-password { width: 120px; }
 
 .toolbar-group {
   display: flex;
@@ -47,14 +129,21 @@ html, body {
   .toolbar-separator { display: none; }
   .toolbar-label { display: none; }
   #toolbar { gap: 4px; padding: 6px 8px; }
-  select, button { padding: 5px 6px; font-size: 12px; }
+  select, button, #ssh-config input { padding: 5px 6px; font-size: 12px; }
   #connect-btn { min-width: 80px; }
   #port-select { max-width: 160px; }
+  #ssh-host { width: 120px; }
+  #ssh-port.ssh-port-input { width: 50px; }
+  #ssh-username { width: 80px; }
+  #ssh-password { width: 90px; }
 }
 
 @media (max-width: 480px) {
   #port-select { max-width: 120px; }
   #status-indicator span { display: none; }
+  #ssh-host { width: 100px; }
+  #ssh-username { width: 70px; }
+  #ssh-password { width: 70px; }
 }
 
 .toolbar-label {
@@ -229,6 +318,12 @@ select:disabled, button:disabled {
   width: 16px;
   height: 16px;
   cursor: pointer;
+}
+
+.settings-section-ssh {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #0f3460;
 }
 
 /* Confirm modal */
