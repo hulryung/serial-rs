@@ -2240,6 +2240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "matches"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3988,6 +3997,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "dirs",
  "futures",
  "mime_guess",
  "objc2",
@@ -4005,6 +4015,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "zmodem2",
 ]
 
 [[package]]
@@ -5033,10 +5044,14 @@ version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f30143827ddab0d256fd843b7a66d164e9f271cfa0dde49142c5ca0ca291f1e"
 dependencies = [
+ "matchers",
  "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
  "tracing-log",
 ]
@@ -6299,3 +6314,14 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zmodem2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "515c519057f07982ebb6eed12d5316a52ee563b004cf08961019166e33a7cc9d"
+dependencies = [
+ "bitflags 2.11.0",
+ "hex",
+ "thiserror 1.0.69",
+]

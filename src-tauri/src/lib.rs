@@ -1,12 +1,16 @@
 mod ssh;
+#[allow(dead_code)]
+mod zmodem;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        Path as AxumPath, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -97,6 +101,9 @@ struct AppState {
     connection: Mutex<Option<ConnectionKind>>,
     broadcast_tx: broadcast::Sender<Vec<u8>>,
     scrollback: Arc<Mutex<VecDeque<u8>>>,
+    zmodem_active: Arc<AtomicBool>,
+    zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    zmodem_files: Mutex<Vec<PathBuf>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +226,7 @@ async fn connect(
     // Use the shared broadcast sender
     let broadcast_tx = state.broadcast_tx.clone();
 
-    // Reader task: serial -> broadcast + scrollback
+    // Reader task: serial -> broadcast + scrollback (with ZMODEM intercept)
     let bc_tx = broadcast_tx.clone();
     let state_for_reader = state.clone();
     let reader_handle = tokio::spawn(async move {
@@ -232,7 +239,17 @@ async fn connect(
                 }
                 Ok(n) => {
                     let data = buf[..n].to_vec();
-                    // Append to scrollback buffer
+
+                    // If ZMODEM is active, route data to the ZMODEM handler
+                    if state_for_reader.zmodem_active.load(Ordering::Relaxed) {
+                        let tx = state_for_reader.zmodem_data_tx_shared.lock().await;
+                        if let Some(ref zmodem_tx) = *tx {
+                            let _ = zmodem_tx.send(data).await;
+                        }
+                        continue;
+                    }
+
+                    // Normal path: append to scrollback and broadcast
                     {
                         let mut sb = state_for_reader.scrollback.lock().await;
                         sb.extend(&data);
@@ -344,6 +361,8 @@ async fn ssh_connect(
         state.broadcast_tx.clone(),
         state.scrollback.clone(),
         SCROLLBACK_MAX,
+        state.zmodem_active.clone(),
+        state.zmodem_data_tx_shared.clone(),
     )
     .await
     {
@@ -454,11 +473,31 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     };
 
-    // Task A: broadcast (serial RX) -> WebSocket
+    // Task A: broadcast (serial RX) -> WebSocket (with ZMODEM filtering)
+    let zmodem_active_for_send = state.zmodem_active.clone();
     let mut send_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
                 Ok(data) => {
+                    // Always intercept ZMODEM notifications (sent as Text frames)
+                    // regardless of zmodem_active state, so "completed" notifications
+                    // arrive as Text frames that the frontend can parse.
+                    if data.starts_with(b"\x1b]zmodem;") {
+                        if ws_tx
+                            .send(Message::Text(
+                                String::from_utf8_lossy(&data).to_string().into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    // During ZMODEM mode, suppress raw transfer data
+                    if zmodem_active_for_send.load(Ordering::Relaxed) {
+                        continue;
+                    }
                     if ws_tx.send(Message::Binary(data.into())).await.is_err() {
                         break;
                     }
@@ -473,12 +512,17 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Task B: WebSocket -> serial TX (via mpsc)
+    // Task B: WebSocket -> serial TX (via mpsc) — blocked during ZMODEM
     let state_clone = state.clone();
+    let zmodem_active_for_recv = state.zmodem_active.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
+                    // Block user input during ZMODEM transfer
+                    if zmodem_active_for_recv.load(Ordering::Relaxed) {
+                        continue;
+                    }
                     if let Some(tx) = get_write_tx(&state_clone).await {
                         if tx.send(data.to_vec()).await.is_err() {
                             tracing::error!("Failed to send data to serial writer");
@@ -529,6 +573,225 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 }
 
 // ---------------------------------------------------------------------------
+// ZMODEM REST handlers
+// ---------------------------------------------------------------------------
+
+async fn zmodem_list_files(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let files = state.zmodem_files.lock().await;
+    let names: Vec<String> = files
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .collect();
+    Json(serde_json::json!({ "files": names }))
+}
+
+async fn zmodem_download_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath(filename): AxumPath<String>,
+) -> impl IntoResponse {
+    let files = state.zmodem_files.lock().await;
+    let found = files.iter().find(|p| {
+        p.file_name()
+            .map(|n| n.to_string_lossy() == filename)
+            .unwrap_or(false)
+    });
+    match found {
+        Some(path) => match tokio::fs::read(path).await {
+            Ok(data) => (
+                StatusCode::OK,
+                [
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/octet-stream".to_string(),
+                    ),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{}\"", filename),
+                    ),
+                ],
+                data,
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    ok: false,
+                    message: format!("Failed to read file: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                ok: false,
+                message: "File not found".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ZMODEM interceptor task
+// ---------------------------------------------------------------------------
+
+/// Spawn a task that subscribes to the broadcast channel, detects ZMODEM
+/// init sequences, and handles the transfer using a pure Rust ZMODEM receiver.
+/// During ZMODEM mode, data is routed to the receiver instead of WebSocket clients.
+/// Receiver responses are sent back through the write channel.
+fn spawn_zmodem_interceptor(state: Arc<AppState>) {
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        loop {
+            let data = match broadcast_rx.recv().await {
+                Ok(data) => data,
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            };
+
+            // Only scan when not already in ZMODEM mode
+            if state.zmodem_active.load(Ordering::Relaxed) {
+                continue;
+            }
+
+            if !zmodem::detect_zmodem(&data) {
+                continue;
+            }
+
+            tracing::info!("ZMODEM init sequence detected, starting receive");
+
+            // Save to ~/Downloads
+            let download_dir = dirs::download_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"));
+            // Create the pure Rust ZMODEM receiver
+            let mut receiver = zmodem::ZmodemReceiver::new(download_dir);
+
+            // Set up an mpsc channel for routing data to the ZMODEM handler
+            let (zmodem_tx, mut zmodem_rx) = mpsc::channel::<Vec<u8>>(256);
+
+            // Activate ZMODEM mode
+            state.zmodem_active.store(true, Ordering::SeqCst);
+            *state.zmodem_data_tx_shared.lock().await = Some(zmodem_tx);
+
+            // Notify clients that ZMODEM started
+            let _ = state.broadcast_tx.send(
+                format!(
+                    "\x1b]zmodem;{}\x07",
+                    serde_json::json!({"type":"zmodem","state":"started"})
+                )
+                .into_bytes(),
+            );
+
+            // Get write channel for sending responses back to serial/SSH
+            let write_tx = {
+                let conn = state.connection.lock().await;
+                match conn.as_ref() {
+                    Some(ConnectionKind::Serial(c)) => Some(c.tx_to_serial.clone()),
+                    Some(ConnectionKind::Ssh(c)) => Some(c.tx_to_ssh.clone()),
+                    None => None,
+                }
+            };
+
+            // Feed initial ZMODEM data to the receiver
+            tracing::info!("ZMODEM: feeding initial {} bytes to receiver", data.len());
+            let response = receiver.process(&data);
+            tracing::info!("ZMODEM: initial response {} bytes", response.len());
+            if !response.is_empty() {
+                if let Some(ref tx) = write_tx {
+                    match tx.send(response).await {
+                        Ok(_) => tracing::info!("ZMODEM: initial response sent to write channel"),
+                        Err(e) => tracing::error!("ZMODEM: failed to send initial response: {}", e),
+                    }
+                } else {
+                    tracing::error!("ZMODEM: no write_tx available!");
+                }
+            }
+
+            tracing::info!("ZMODEM: entering receive loop, waiting for data on zmodem_rx");
+
+            // Process incoming data through the receiver
+            let mut last_progress_time = std::time::Instant::now();
+            while let Some(incoming) = zmodem_rx.recv().await {
+                let response = receiver.process(&incoming);
+                if !response.is_empty() {
+                    if let Some(ref tx) = write_tx {
+                        if let Err(e) = tx.send(response).await {
+                            tracing::error!("ZMODEM: write_tx send failed: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Send progress update every 200ms
+                if last_progress_time.elapsed() >= std::time::Duration::from_millis(200) {
+                    last_progress_time = std::time::Instant::now();
+                    if let Some(filename) = receiver.current_filename() {
+                        let _ = state.broadcast_tx.send(
+                            format!(
+                                "\x1b]zmodem;{}\x07",
+                                serde_json::json!({
+                                    "type": "zmodem",
+                                    "state": "progress",
+                                    "filename": filename,
+                                    "received": receiver.bytes_received(),
+                                    "total": receiver.current_file_size()
+                                })
+                            )
+                            .into_bytes(),
+                        );
+                    }
+                }
+
+                if receiver.is_done() {
+                    break;
+                }
+            }
+
+            // Collect received files
+            let files: Vec<PathBuf> = receiver.received_files().to_vec();
+
+            let file_names: Vec<String> = files
+                .iter()
+                .filter_map(|p| {
+                    p.file_name().map(|n| n.to_string_lossy().to_string())
+                })
+                .collect();
+
+            tracing::info!(
+                "ZMODEM transfer complete, received {} files: {:?}",
+                files.len(),
+                file_names
+            );
+
+            // Store files
+            *state.zmodem_files.lock().await = files;
+
+            // Deactivate ZMODEM mode
+            *state.zmodem_data_tx_shared.lock().await = None;
+            state.zmodem_active.store(false, Ordering::SeqCst);
+
+            // Notify clients
+            let _ = state.broadcast_tx.send(
+                format!(
+                    "\x1b]zmodem;{}\x07",
+                    serde_json::json!({
+                        "type": "zmodem",
+                        "state": "completed",
+                        "files": file_names
+                    })
+                )
+                .into_bytes(),
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Embedded static file handler
 // ---------------------------------------------------------------------------
 
@@ -572,7 +835,13 @@ async fn start_axum_server() {
         connection: Mutex::new(None),
         broadcast_tx,
         scrollback: Arc::new(Mutex::new(VecDeque::new())),
+        zmodem_active: Arc::new(AtomicBool::new(false)),
+        zmodem_data_tx_shared: Arc::new(Mutex::new(None)),
+        zmodem_files: Mutex::new(Vec::new()),
     });
+
+    // Spawn ZMODEM interceptor that monitors broadcast for ZMODEM init sequences
+    spawn_zmodem_interceptor(state.clone());
 
     let cors = CorsLayer::very_permissive();
 
@@ -583,7 +852,9 @@ async fn start_axum_server() {
         .route("/api/ssh/connect", post(ssh_connect))
         .route("/api/status", get(status))
         .route("/ws", get(ws_handler))
-        .with_state(state)
+        .route("/api/zmodem/files", get(zmodem_list_files))
+        .route("/api/zmodem/download/{filename}", get(zmodem_download_file))
+        .with_state(state.clone())
         .fallback(static_handler)
         .layer(cors);
 
@@ -604,7 +875,9 @@ async fn start_axum_server() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter("serial_rs_lib=debug,info")
+        .init();
 
     // Disable macOS "press and hold" accent menu so held keys repeat instead
     #[cfg(target_os = "macos")]

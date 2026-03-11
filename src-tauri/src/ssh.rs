@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,8 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 
 struct SshClientHandler {
     broadcast_tx: broadcast::Sender<Vec<u8>>,
+    zmodem_active: Arc<AtomicBool>,
+    zmodem_data_tx: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
 }
 
 #[async_trait]
@@ -31,6 +34,22 @@ impl client::Handler for SshClientHandler {
         data: &[u8],
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        // During ZMODEM mode, route data to the ZMODEM handler instead of broadcast
+        if self.zmodem_active.load(Ordering::Relaxed) {
+            let tx = self.zmodem_data_tx.lock().await;
+            if let Some(ref zmodem_tx) = *tx {
+                tracing::debug!("SSH data -> ZMODEM channel: {} bytes", data.len());
+                match zmodem_tx.send(data.to_vec()).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("SSH data -> ZMODEM channel send failed: {}", e);
+                    }
+                }
+                return Ok(());
+            } else {
+                tracing::warn!("SSH: zmodem_active=true but zmodem_data_tx is None, falling through to broadcast");
+            }
+        }
         let _ = self.broadcast_tx.send(data.to_vec());
         Ok(())
     }
@@ -69,11 +88,15 @@ impl SshConnection {
         broadcast_tx: broadcast::Sender<Vec<u8>>,
         scrollback: Arc<Mutex<std::collections::VecDeque<u8>>>,
         scrollback_max: usize,
+        zmodem_active: Arc<AtomicBool>,
+        zmodem_data_tx: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
     ) -> Result<Self, String> {
         let ssh_config = russh::client::Config::default();
 
         let handler = SshClientHandler {
             broadcast_tx: broadcast_tx.clone(),
+            zmodem_active,
+            zmodem_data_tx,
         };
 
         let mut handle = tokio::time::timeout(

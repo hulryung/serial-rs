@@ -42,11 +42,20 @@
   const confirmAlwaysBtn = document.getElementById('confirm-always');
   const confirmCancelBtn = document.getElementById('confirm-cancel');
 
+  // DOM elements - ZMODEM
+  var zmodemOverlay = document.getElementById('zmodem-overlay');
+  var zmodemFilename = document.getElementById('zmodem-filename');
+  var zmodemStatus = document.getElementById('zmodem-status');
+  var zmodemProgressWrap = document.getElementById('zmodem-progress-wrap');
+  var zmodemProgressFill = document.getElementById('zmodem-progress-fill');
+  var zmodemProgressText = document.getElementById('zmodem-progress-text');
+  var zmodemCloseBtn = document.getElementById('zmodem-close-btn');
+
   // State
   var term = null;
   var ws = null;
-  var attachAddon = null;
   var fitAddon = null;
+  var onDataDisposable = null;
   var connected = false;
   var currentMode = 'serial'; // 'serial' or 'ssh'
   var settings = loadSettings();
@@ -175,7 +184,75 @@
     }
   }
 
-  // Open WebSocket and attach to terminal
+  // ZMODEM overlay functions
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  }
+
+  function showZmodemOverlay() {
+    zmodemFilename.textContent = '';
+    zmodemStatus.textContent = 'Waiting for transfer...';
+    zmodemProgressWrap.classList.add('hidden');
+    zmodemProgressFill.style.width = '0%';
+    zmodemProgressText.textContent = '0%';
+    zmodemCloseBtn.classList.add('hidden');
+    zmodemOverlay.classList.remove('hidden');
+  }
+
+  function updateZmodemProgress(filename, received, total) {
+    zmodemFilename.textContent = filename;
+    zmodemProgressWrap.classList.remove('hidden');
+    if (total > 0) {
+      var pct = Math.min(100, Math.round((received / total) * 100));
+      zmodemProgressFill.style.width = pct + '%';
+      zmodemProgressText.textContent = formatBytes(received) + ' / ' + formatBytes(total) + '  (' + pct + '%)';
+    } else {
+      zmodemProgressFill.style.width = '0%';
+      zmodemProgressText.textContent = formatBytes(received);
+    }
+    zmodemStatus.textContent = 'Receiving...';
+  }
+
+  function showZmodemComplete(files) {
+    zmodemProgressFill.style.width = '100%';
+    zmodemProgressText.textContent = '100%';
+    if (files && files.length > 0) {
+      zmodemStatus.textContent = 'Transfer complete (' + files.join(', ') + ')';
+    } else {
+      zmodemStatus.textContent = 'Transfer complete';
+    }
+    zmodemCloseBtn.classList.remove('hidden');
+  }
+
+  function hideZmodemOverlay() {
+    zmodemOverlay.classList.add('hidden');
+  }
+
+  function handleZmodemNotification(str) {
+    var match = str.match(/\x1b\]zmodem;(.*?)\x07/);
+    if (!match) return;
+
+    try {
+      var msg = JSON.parse(match[1]);
+      if (msg.state === 'started') {
+        showZmodemOverlay();
+      } else if (msg.state === 'progress') {
+        updateZmodemProgress(msg.filename || '', msg.received || 0, msg.total || 0);
+      } else if (msg.state === 'completed') {
+        showZmodemComplete(msg.files);
+      } else if (msg.state === 'error') {
+        hideZmodemOverlay();
+        term.writeln('\r\n[ZMODEM Error] ' + (msg.message || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error('Failed to parse ZMODEM notification:', e);
+    }
+  }
+
+  // Open WebSocket and manually handle messages (replaces AttachAddon for ZMODEM support)
   function openWebSocket(label) {
     ws = new WebSocket(WS_BASE + '/ws');
     ws.binaryType = 'arraybuffer';
@@ -185,8 +262,29 @@
       updateUI();
       term.writeln('\r\n[Connected] ' + label);
 
-      attachAddon = new AttachAddon.AttachAddon(ws);
-      term.loadAddon(attachAddon);
+      // Manual message handler instead of AttachAddon (intercepts ZMODEM notifications)
+      ws.onmessage = function(event) {
+        if (typeof event.data === 'string') {
+          // Text frame — check for ZMODEM notification
+          if (event.data.indexOf('\x1b]zmodem;') !== -1) {
+            handleZmodemNotification(event.data);
+            return;
+          }
+          // Other text frames — write to terminal
+          term.write(event.data);
+        } else if (event.data instanceof ArrayBuffer) {
+          var bytes = new Uint8Array(event.data);
+          // Normal terminal data
+          term.write(bytes);
+        }
+      };
+
+      // Send terminal input to WebSocket
+      onDataDisposable = term.onData(function(data) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(data));
+        }
+      });
 
       // Send initial size for SSH
       if (currentMode === 'ssh') {
@@ -411,9 +509,9 @@
   async function disconnect() {
     connected = false;
 
-    if (attachAddon) {
-      attachAddon.dispose();
-      attachAddon = null;
+    if (onDataDisposable) {
+      onDataDisposable.dispose();
+      onDataDisposable = null;
     }
     if (ws) {
       ws.onopen = null;
@@ -520,6 +618,11 @@
   alwaysReconnectCheckbox.addEventListener('change', function() {
     settings.alwaysReconnect = alwaysReconnectCheckbox.checked;
     saveSettings();
+  });
+
+  zmodemCloseBtn.addEventListener('click', hideZmodemOverlay);
+  zmodemOverlay.addEventListener('click', function(e) {
+    if (e.target === zmodemOverlay) hideZmodemOverlay();
   });
 
   rememberSshCheckbox.addEventListener('change', function() {
