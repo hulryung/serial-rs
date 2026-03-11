@@ -715,6 +715,8 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
             tracing::info!("ZMODEM: entering receive loop, waiting for data on zmodem_rx");
 
             // Process incoming data through the receiver
+            let transfer_start = std::time::Instant::now();
+            let mut file_start = std::time::Instant::now();
             let mut last_progress_time = std::time::Instant::now();
             while let Some(incoming) = zmodem_rx.recv().await {
                 let response = receiver.process(&incoming);
@@ -725,6 +727,26 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                             break;
                         }
                     }
+                }
+
+                // Check if a file just completed
+                if let Some(completed) = receiver.take_completed() {
+                    let file_elapsed = file_start.elapsed().as_millis() as u64;
+                    let _ = state.broadcast_tx.send(
+                        format!(
+                            "\x1b]zmodem;{}\x07",
+                            serde_json::json!({
+                                "type": "zmodem",
+                                "state": "file_complete",
+                                "filename": completed.filename,
+                                "size": completed.size,
+                                "elapsedMs": file_elapsed
+                            })
+                        )
+                        .into_bytes(),
+                    );
+                    // Reset file timer for next file
+                    file_start = std::time::Instant::now();
                 }
 
                 // Send progress update every 200ms
@@ -738,7 +760,7 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                                     "type": "zmodem",
                                     "state": "progress",
                                     "filename": filename,
-                                    "received": receiver.bytes_received(),
+                                    "received": receiver.current_bytes(),
                                     "total": receiver.current_file_size()
                                 })
                             )
@@ -775,6 +797,10 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
             *state.zmodem_data_tx_shared.lock().await = None;
             state.zmodem_active.store(false, Ordering::SeqCst);
 
+            // Compute transfer stats
+            let elapsed_ms = transfer_start.elapsed().as_millis() as u64;
+            let total_bytes: u64 = receiver.total_bytes();
+
             // Notify clients
             let _ = state.broadcast_tx.send(
                 format!(
@@ -782,7 +808,9 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                     serde_json::json!({
                         "type": "zmodem",
                         "state": "completed",
-                        "files": file_names
+                        "files": file_names,
+                        "totalBytes": total_bytes,
+                        "elapsedMs": elapsed_ms
                     })
                 )
                 .into_bytes(),

@@ -13,6 +13,12 @@ pub fn detect_zmodem(buf: &[u8]) -> bool {
         .any(|w| w == ZMODEM_INIT)
 }
 
+/// Info about a completed file transfer.
+pub struct CompletedFile {
+    pub filename: String,
+    pub size: u64,
+}
+
 /// ZMODEM receiver wrapping the `zmodem2` crate.
 /// Provides a simple `process()` / `is_done()` API for the interceptor task.
 pub struct ZmodemReceiver {
@@ -22,7 +28,9 @@ pub struct ZmodemReceiver {
     current_file: Option<std::fs::File>,
     current_filename: Option<String>,
     current_file_size: u64,
-    bytes_received: u64,
+    current_bytes: u64,
+    total_bytes: u64,
+    last_completed: Option<CompletedFile>,
     done: bool,
 }
 
@@ -35,7 +43,9 @@ impl ZmodemReceiver {
             current_file: None,
             current_filename: None,
             current_file_size: 0,
-            bytes_received: 0,
+            current_bytes: 0,
+            total_bytes: 0,
+            last_completed: None,
             done: false,
         }
     }
@@ -112,7 +122,7 @@ impl ZmodemReceiver {
                         });
 
                     self.current_file_size = self.inner.file_size() as u64;
-                    self.bytes_received = 0;
+                    self.current_bytes = 0;
                     tracing::info!("ZMODEM: receiving file: {} ({} bytes)", filename, self.current_file_size);
 
                     let file_path = self.download_dir.join(&filename);
@@ -132,6 +142,11 @@ impl ZmodemReceiver {
                         if let Some(filename) = self.current_filename.take() {
                             let path = self.download_dir.join(&filename);
                             tracing::info!("ZMODEM: file received: {}", path.display());
+                            self.total_bytes += self.current_bytes;
+                            self.last_completed = Some(CompletedFile {
+                                filename: filename.clone(),
+                                size: self.current_bytes,
+                            });
                             self.received_files.push(path);
                         }
                     }
@@ -148,7 +163,7 @@ impl ZmodemReceiver {
         let file_data = self.inner.drain_file();
         if !file_data.is_empty() {
             let len = file_data.len();
-            self.bytes_received += len as u64;
+            self.current_bytes += len as u64;
             if let Some(ref mut file) = self.current_file {
                 if let Err(e) = file.write_all(file_data) {
                     tracing::error!("ZMODEM: file write error: {}", e);
@@ -174,8 +189,17 @@ impl ZmodemReceiver {
         self.current_file_size
     }
 
-    pub fn bytes_received(&self) -> u64 {
-        self.bytes_received
+    pub fn current_bytes(&self) -> u64 {
+        self.current_bytes
+    }
+
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+
+    /// Take the last completed file info (returns None after first call).
+    pub fn take_completed(&mut self) -> Option<CompletedFile> {
+        self.last_completed.take()
     }
 }
 

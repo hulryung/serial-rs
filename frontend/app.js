@@ -42,14 +42,6 @@
   const confirmAlwaysBtn = document.getElementById('confirm-always');
   const confirmCancelBtn = document.getElementById('confirm-cancel');
 
-  // DOM elements - ZMODEM
-  var zmodemOverlay = document.getElementById('zmodem-overlay');
-  var zmodemFilename = document.getElementById('zmodem-filename');
-  var zmodemStatus = document.getElementById('zmodem-status');
-  var zmodemProgressWrap = document.getElementById('zmodem-progress-wrap');
-  var zmodemProgressFill = document.getElementById('zmodem-progress-fill');
-  var zmodemProgressText = document.getElementById('zmodem-progress-text');
-  var zmodemCloseBtn = document.getElementById('zmodem-close-btn');
 
   // State
   var term = null;
@@ -184,51 +176,15 @@
     }
   }
 
-  // ZMODEM overlay functions
+  // ZMODEM inline progress in terminal
+  var zmodemFileStart = 0;
+  var zmodemFileCount = 0;
+
   function formatBytes(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-  }
-
-  function showZmodemOverlay() {
-    zmodemFilename.textContent = '';
-    zmodemStatus.textContent = 'Waiting for transfer...';
-    zmodemProgressWrap.classList.add('hidden');
-    zmodemProgressFill.style.width = '0%';
-    zmodemProgressText.textContent = '0%';
-    zmodemCloseBtn.classList.add('hidden');
-    zmodemOverlay.classList.remove('hidden');
-  }
-
-  function updateZmodemProgress(filename, received, total) {
-    zmodemFilename.textContent = filename;
-    zmodemProgressWrap.classList.remove('hidden');
-    if (total > 0) {
-      var pct = Math.min(100, Math.round((received / total) * 100));
-      zmodemProgressFill.style.width = pct + '%';
-      zmodemProgressText.textContent = formatBytes(received) + ' / ' + formatBytes(total) + '  (' + pct + '%)';
-    } else {
-      zmodemProgressFill.style.width = '0%';
-      zmodemProgressText.textContent = formatBytes(received);
-    }
-    zmodemStatus.textContent = 'Receiving...';
-  }
-
-  function showZmodemComplete(files) {
-    zmodemProgressFill.style.width = '100%';
-    zmodemProgressText.textContent = '100%';
-    if (files && files.length > 0) {
-      zmodemStatus.textContent = 'Transfer complete (' + files.join(', ') + ')';
-    } else {
-      zmodemStatus.textContent = 'Transfer complete';
-    }
-    zmodemCloseBtn.classList.remove('hidden');
-  }
-
-  function hideZmodemOverlay() {
-    zmodemOverlay.classList.add('hidden');
   }
 
   function handleZmodemNotification(str) {
@@ -238,13 +194,47 @@
     try {
       var msg = JSON.parse(match[1]);
       if (msg.state === 'started') {
-        showZmodemOverlay();
+        zmodemFileCount = 0;
+        zmodemFileStart = Date.now();
+        term.write('\r\n');
       } else if (msg.state === 'progress') {
-        updateZmodemProgress(msg.filename || '', msg.received || 0, msg.total || 0);
+        var filename = msg.filename || '';
+        var received = msg.received || 0;
+        var total = msg.total || 0;
+        var elapsed = (Date.now() - zmodemFileStart) / 1000;
+        var speed = elapsed > 0 ? received / elapsed : 0;
+        var pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+
+        var line = '\r\x1b[K' + filename + '  ' +
+          pct + '%  ' +
+          formatBytes(received) + '/' + formatBytes(total) +
+          '  ' + formatBytes(speed) + '/s';
+        term.write(line);
+      } else if (msg.state === 'file_complete') {
+        var fname = msg.filename || '';
+        var size = msg.size || 0;
+        var ms = msg.elapsedMs || 0;
+        var sec = ms / 1000;
+        var fspeed = sec > 0 ? size / sec : 0;
+
+        term.write('\r\x1b[K');
+        term.writeln(fname + '  ' + formatBytes(size) + '  ' + sec.toFixed(1) + 's  ' + formatBytes(fspeed) + '/s');
+        zmodemFileCount++;
+        zmodemFileStart = Date.now();
       } else if (msg.state === 'completed') {
-        showZmodemComplete(msg.files);
+        var totalBytes = msg.totalBytes || 0;
+        var elapsedMs = msg.elapsedMs || 0;
+        var elapsedSec = elapsedMs / 1000;
+        var cspeed = elapsedSec > 0 ? totalBytes / elapsedSec : 0;
+
+        // Show total summary when multiple files
+        if (zmodemFileCount > 1) {
+          term.writeln('Total: ' + zmodemFileCount + ' files  ' +
+            formatBytes(totalBytes) + '  ' +
+            elapsedSec.toFixed(1) + 's  ' +
+            formatBytes(cspeed) + '/s');
+        }
       } else if (msg.state === 'error') {
-        hideZmodemOverlay();
         term.writeln('\r\n[ZMODEM Error] ' + (msg.message || 'Unknown error'));
       }
     } catch (e) {
@@ -597,6 +587,13 @@
 
   refreshBtn.addEventListener('click', refreshPorts);
 
+  // Enter key on SSH inputs triggers connect
+  [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput].forEach(function(el) {
+    el.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !connected) connect();
+    });
+  });
+
   settingsBtn.addEventListener('click', function() {
     settingsModal.classList.remove('hidden');
   });
@@ -618,11 +615,6 @@
   alwaysReconnectCheckbox.addEventListener('change', function() {
     settings.alwaysReconnect = alwaysReconnectCheckbox.checked;
     saveSettings();
-  });
-
-  zmodemCloseBtn.addEventListener('click', hideZmodemOverlay);
-  zmodemOverlay.addEventListener('click', function(e) {
-    if (e.target === zmodemOverlay) hideZmodemOverlay();
   });
 
   rememberSshCheckbox.addEventListener('change', function() {
