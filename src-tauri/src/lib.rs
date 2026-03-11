@@ -606,6 +606,15 @@ async fn start_axum_server() {
 pub fn run() {
     tracing_subscriber::fmt::init();
 
+    // Disable macOS "press and hold" accent menu so held keys repeat instead
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSString, NSUserDefaults};
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str("ApplePressAndHoldEnabled");
+        defaults.setBool_forKey(false, &key);
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             // Native macOS menu bar

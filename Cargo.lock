@@ -3990,6 +3990,8 @@ dependencies = [
  "axum",
  "futures",
  "mime_guess",
+ "objc2",
+ "objc2-foundation",
  "russh",
  "rust-embed",
  "serde",
