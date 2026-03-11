@@ -9,6 +9,7 @@
   const databitsSelect = document.getElementById('databits-select');
   const stopbitsSelect = document.getElementById('stopbits-select');
   const paritySelect = document.getElementById('parity-select');
+  const flowcontrolSelect = document.getElementById('flowcontrol-select');
   const refreshBtn = document.getElementById('refresh-btn');
 
   // DOM elements - SSH
@@ -150,6 +151,7 @@
     r.dataBits = session.dataBits || 8;
     r.stopBits = session.stopBits || 1;
     r.parity = session.parity || 'none';
+    r.flowControl = session.flowControl || 'none';
     r.sshPort = session.sshPort || 22;
     return r;
   }
@@ -428,6 +430,7 @@
             databitsSelect.value = status.config.data_bits;
             stopbitsSelect.value = status.config.stop_bits;
             paritySelect.value = status.config.parity;
+            flowcontrolSelect.value = status.config.flow_control || 'none';
           }
           openWebSocket(status.port + ' @ ' + status.config.baud_rate);
         }
@@ -482,6 +485,7 @@
       data_bits: parseInt(databitsSelect.value),
       stop_bits: parseInt(stopbitsSelect.value),
       parity: paritySelect.value,
+      flow_control: flowcontrolSelect.value,
     };
 
     try {
@@ -615,6 +619,7 @@
       databitsSelect.value = r.dataBits;
       stopbitsSelect.value = r.stopBits;
       paritySelect.value = r.parity;
+      flowcontrolSelect.value = r.flowControl;
     } else {
       sshHostInput.value = r.host;
       sshPortInput.value = r.sshPort;
@@ -825,6 +830,7 @@
       document.getElementById('setting-databits').value = session.dataBits || 8;
       document.getElementById('setting-stopbits').value = session.stopBits || 1;
       document.getElementById('setting-parity').value = session.parity || 'none';
+      document.getElementById('setting-flowcontrol').value = session.flowControl || 'none';
     } else {
       connSerial.classList.add('hidden');
       connSsh.classList.remove('hidden');
@@ -893,6 +899,7 @@
         session.dataBits = parseInt(document.getElementById('setting-databits').value) || 8;
         session.stopBits = parseInt(document.getElementById('setting-stopbits').value) || 1;
         session.parity = document.getElementById('setting-parity').value || 'none';
+        session.flowControl = document.getElementById('setting-flowcontrol').value || 'none';
       } else {
         session.host = document.getElementById('setting-ssh-host').value.trim();
         session.sshPort = parseInt(document.getElementById('setting-ssh-port').value) || 22;
@@ -1010,6 +1017,7 @@
       dataBits: type === 'serial' ? parseInt(document.getElementById('new-session-databits').value) : null,
       stopBits: type === 'serial' ? parseInt(document.getElementById('new-session-stopbits').value) : null,
       parity: type === 'serial' ? document.getElementById('new-session-parity').value : null,
+      flowControl: type === 'serial' ? document.getElementById('new-session-flowcontrol').value : null,
       sshPort: type === 'ssh' ? parseInt(document.getElementById('new-session-ssh-port').value) : null,
       // Visual settings inherit from defaults
       fontSize: null,

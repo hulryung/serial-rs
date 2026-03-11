@@ -49,6 +49,7 @@ struct PortConfig {
     data_bits: u8,
     stop_bits: u8,
     parity: String,
+    flow_control: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -135,6 +136,14 @@ fn to_parity(p: &str) -> tokio_serial::Parity {
     }
 }
 
+fn to_flow_control(fc: &str) -> tokio_serial::FlowControl {
+    match fc {
+        "software" => tokio_serial::FlowControl::Software,
+        "hardware" => tokio_serial::FlowControl::Hardware,
+        _ => tokio_serial::FlowControl::None,
+    }
+}
+
 fn port_type_string(pt: &serialport::SerialPortType) -> String {
     match pt {
         serialport::SerialPortType::UsbPort(info) => {
@@ -198,10 +207,12 @@ async fn connect(
         );
     }
 
+    let flow_control_str = config.flow_control.as_deref().unwrap_or("none");
     let builder = tokio_serial::new(&config.port, config.baud_rate)
         .data_bits(to_data_bits(config.data_bits))
         .stop_bits(to_stop_bits(config.stop_bits))
-        .parity(to_parity(&config.parity));
+        .parity(to_parity(&config.parity))
+        .flow_control(to_flow_control(flow_control_str));
 
     let serial_port = match builder.open_native_async() {
         Ok(p) => p,

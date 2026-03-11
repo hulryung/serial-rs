@@ -57,6 +57,11 @@
             <option value="odd">Odd</option>
             <option value="even">Even</option>
           </select>
+          <select id="flowcontrol-select">
+            <option value="none" selected>No Flow Ctrl</option>
+            <option value="software">SW (XON/XOFF)</option>
+            <option value="hardware">HW (RTS/CTS)</option>
+          </select>
         </div>
       </div>
 
@@ -259,6 +264,14 @@
                     <option value="even">Even</option>
                   </select>
                 </div>
+                <div class="setting-row">
+                  <label>Flow Control</label>
+                  <select id="setting-flowcontrol" class="setting-input-sm">
+                    <option value="none">None</option>
+                    <option value="software">Software (XON/XOFF)</option>
+                    <option value="hardware">Hardware (RTS/CTS)</option>
+                  </select>
+                </div>
               </div>
             </div>
             <div id="settings-conn-ssh" class="hidden">
@@ -347,6 +360,14 @@
                   <option value="none" selected>None</option>
                   <option value="odd">Odd</option>
                   <option value="even">Even</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label>Flow Control</label>
+                <select id="new-session-flowcontrol" class="setting-input-sm">
+                  <option value="none" selected>None</option>
+                  <option value="software">Software (XON/XOFF)</option>
+                  <option value="hardware">Hardware (RTS/CTS)</option>
                 </select>
               </div>
             </div>
