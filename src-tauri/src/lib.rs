@@ -2,7 +2,7 @@ mod ssh;
 #[allow(dead_code)]
 mod zmodem;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path as AxumPath, State, WebSocketUpgrade,
+        Path as AxumPath, Query, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -80,6 +80,16 @@ struct StatusResponse {
     ssh_config: Option<SshStatusConfig>,
 }
 
+#[derive(Serialize)]
+struct TabStatusEntry {
+    tab_id: String,
+    connected: bool,
+    connection_type: Option<String>,
+    port: Option<String>,
+    config: Option<PortConfig>,
+    ssh_config: Option<SshStatusConfig>,
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -99,14 +109,19 @@ enum ConnectionKind {
     Ssh(ssh::SshConnection),
 }
 
-struct AppState {
-    connection: Mutex<Option<ConnectionKind>>,
+/// Per-tab connection state
+struct ConnectionState {
+    connection: ConnectionKind,
     broadcast_tx: broadcast::Sender<Vec<u8>>,
     scrollback: Arc<Mutex<VecDeque<u8>>>,
     zmodem_active: Arc<AtomicBool>,
     zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
-    zmodem_files: Mutex<Vec<PathBuf>>,
-    log_file: Arc<Mutex<Option<(String, tokio::fs::File)>>>,
+    zmodem_files: Vec<PathBuf>,
+    log_file: Option<(String, tokio::fs::File)>,
+}
+
+struct AppState {
+    connections: Mutex<HashMap<String, ConnectionState>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -189,21 +204,28 @@ async fn list_ports() -> impl IntoResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct ConnectRequest {
+    tab_id: String,
+    #[serde(flatten)]
+    config: PortConfig,
+}
+
 async fn connect(
     State(state): State<Arc<AppState>>,
-    Json(config): Json<PortConfig>,
+    Json(req): Json<ConnectRequest>,
 ) -> impl IntoResponse {
-    // Clear scrollback for new connection
-    state.scrollback.lock().await.clear();
+    let tab_id = req.tab_id;
+    let config = req.config;
 
-    let mut conn = state.connection.lock().await;
+    let mut connections = state.connections.lock().await;
 
-    if conn.is_some() {
+    if connections.contains_key(&tab_id) {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse {
                 ok: false,
-                message: "Already connected. Disconnect first.".to_string(),
+                message: "Tab already has an active connection. Disconnect first.".to_string(),
             }),
         );
     }
@@ -229,19 +251,25 @@ async fn connect(
         }
     };
 
-    tracing::info!("Opened serial port {} at {} baud", config.port, config.baud_rate);
+    tracing::info!("Opened serial port {} at {} baud (tab {})", config.port, config.baud_rate, tab_id);
 
     let (mut reader, mut writer) = tokio::io::split(serial_port);
 
     // Channel: WebSocket clients -> serial writer
     let (tx_to_serial, mut rx_from_ws) = mpsc::channel::<Vec<u8>>(256);
 
-    // Use the shared broadcast sender
-    let broadcast_tx = state.broadcast_tx.clone();
+    // Per-tab broadcast channel
+    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(1024);
+    let scrollback = Arc::new(Mutex::new(VecDeque::new()));
+    let zmodem_active = Arc::new(AtomicBool::new(false));
+    let zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>> =
+        Arc::new(Mutex::new(None));
 
     // Reader task: serial -> broadcast + scrollback (with ZMODEM intercept)
     let bc_tx = broadcast_tx.clone();
-    let state_for_reader = state.clone();
+    let scrollback_clone = scrollback.clone();
+    let zmodem_active_clone = zmodem_active.clone();
+    let zmodem_data_tx_clone = zmodem_data_tx_shared.clone();
     let reader_handle = tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         loop {
@@ -254,8 +282,8 @@ async fn connect(
                     let data = buf[..n].to_vec();
 
                     // If ZMODEM is active, route data to the ZMODEM handler
-                    if state_for_reader.zmodem_active.load(Ordering::Relaxed) {
-                        let tx = state_for_reader.zmodem_data_tx_shared.lock().await;
+                    if zmodem_active_clone.load(Ordering::Relaxed) {
+                        let tx = zmodem_data_tx_clone.lock().await;
                         if let Some(ref zmodem_tx) = *tx {
                             let _ = zmodem_tx.send(data).await;
                         }
@@ -264,7 +292,7 @@ async fn connect(
 
                     // Normal path: append to scrollback and broadcast
                     {
-                        let mut sb = state_for_reader.scrollback.lock().await;
+                        let mut sb = scrollback_clone.lock().await;
                         sb.extend(&data);
                         while sb.len() > SCROLLBACK_MAX {
                             sb.pop_front();
@@ -292,13 +320,31 @@ async fn connect(
     });
 
     let port_name = config.port.clone();
-    *conn = Some(ConnectionKind::Serial(SerialConnection {
-        port_name: port_name.clone(),
-        config,
-        tx_to_serial,
-        reader_handle,
-        writer_handle,
-    }));
+
+    // Spawn ZMODEM interceptor for this tab
+    spawn_zmodem_interceptor_for_tab(
+        tab_id.clone(),
+        broadcast_tx.clone(),
+        zmodem_active.clone(),
+        zmodem_data_tx_shared.clone(),
+        state.clone(),
+    );
+
+    connections.insert(tab_id.clone(), ConnectionState {
+        connection: ConnectionKind::Serial(SerialConnection {
+            port_name: port_name.clone(),
+            config,
+            tx_to_serial,
+            reader_handle,
+            writer_handle,
+        }),
+        broadcast_tx,
+        scrollback,
+        zmodem_active,
+        zmodem_data_tx_shared,
+        zmodem_files: Vec::new(),
+        log_file: None,
+    });
 
     (
         StatusCode::OK,
@@ -309,35 +355,45 @@ async fn connect(
     )
 }
 
-async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut conn = state.connection.lock().await;
+#[derive(Deserialize)]
+struct DisconnectRequest {
+    tab_id: String,
+}
 
-    match conn.take() {
-        Some(ConnectionKind::Serial(c)) => {
-            tracing::info!("Disconnecting from serial {}", c.port_name);
-            c.reader_handle.abort();
-            c.writer_handle.abort();
-            state.scrollback.lock().await.clear();
-            (
-                StatusCode::OK,
-                Json(ApiResponse {
-                    ok: true,
-                    message: format!("Disconnected from {}", c.port_name),
-                }),
-            )
-        }
-        Some(ConnectionKind::Ssh(c)) => {
-            let host = c.config.host.clone();
-            tracing::info!("Disconnecting from SSH {}", host);
-            c.disconnect().await;
-            state.scrollback.lock().await.clear();
-            (
-                StatusCode::OK,
-                Json(ApiResponse {
-                    ok: true,
-                    message: format!("Disconnected from SSH {}", host),
-                }),
-            )
+async fn disconnect(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DisconnectRequest>,
+) -> impl IntoResponse {
+    let mut connections = state.connections.lock().await;
+
+    match connections.remove(&req.tab_id) {
+        Some(conn_state) => {
+            match conn_state.connection {
+                ConnectionKind::Serial(c) => {
+                    tracing::info!("Disconnecting from serial {} (tab {})", c.port_name, req.tab_id);
+                    c.reader_handle.abort();
+                    c.writer_handle.abort();
+                    (
+                        StatusCode::OK,
+                        Json(ApiResponse {
+                            ok: true,
+                            message: format!("Disconnected from {}", c.port_name),
+                        }),
+                    )
+                }
+                ConnectionKind::Ssh(c) => {
+                    let host = c.config.host.clone();
+                    tracing::info!("Disconnecting from SSH {} (tab {})", host, req.tab_id);
+                    c.disconnect().await;
+                    (
+                        StatusCode::OK,
+                        Json(ApiResponse {
+                            ok: true,
+                            message: format!("Disconnected from SSH {}", host),
+                        }),
+                    )
+                }
+            }
         }
         None => (
             StatusCode::OK,
@@ -349,38 +405,70 @@ async fn disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct SshConnectRequest {
+    tab_id: String,
+    #[serde(flatten)]
+    config: ssh::SshConfig,
+}
+
 async fn ssh_connect(
     State(state): State<Arc<AppState>>,
-    Json(config): Json<ssh::SshConfig>,
+    Json(req): Json<SshConnectRequest>,
 ) -> impl IntoResponse {
-    state.scrollback.lock().await.clear();
+    let tab_id = req.tab_id;
+    let config = req.config;
 
-    let mut conn = state.connection.lock().await;
+    let mut connections = state.connections.lock().await;
 
-    if conn.is_some() {
+    if connections.contains_key(&tab_id) {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse {
                 ok: false,
-                message: "Already connected. Disconnect first.".to_string(),
+                message: "Tab already has an active connection. Disconnect first.".to_string(),
             }),
         );
     }
 
     let host = format!("{}:{}", config.host, config.port);
 
+    // Per-tab broadcast channel
+    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(1024);
+    let scrollback = Arc::new(Mutex::new(VecDeque::new()));
+    let zmodem_active = Arc::new(AtomicBool::new(false));
+    let zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>> =
+        Arc::new(Mutex::new(None));
+
     match ssh::SshConnection::connect(
         config,
-        state.broadcast_tx.clone(),
-        state.scrollback.clone(),
+        broadcast_tx.clone(),
+        scrollback.clone(),
         SCROLLBACK_MAX,
-        state.zmodem_active.clone(),
-        state.zmodem_data_tx_shared.clone(),
+        zmodem_active.clone(),
+        zmodem_data_tx_shared.clone(),
     )
     .await
     {
         Ok(ssh_conn) => {
-            *conn = Some(ConnectionKind::Ssh(ssh_conn));
+            // Spawn ZMODEM interceptor for this tab
+            spawn_zmodem_interceptor_for_tab(
+                tab_id.clone(),
+                broadcast_tx.clone(),
+                zmodem_active.clone(),
+                zmodem_data_tx_shared.clone(),
+                state.clone(),
+            );
+
+            connections.insert(tab_id.clone(), ConnectionState {
+                connection: ConnectionKind::Ssh(ssh_conn),
+                broadcast_tx,
+                scrollback,
+                zmodem_active,
+                zmodem_data_tx_shared,
+                zmodem_files: Vec::new(),
+                log_file: None,
+            });
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -402,34 +490,78 @@ async fn ssh_connect(
     }
 }
 
-async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let conn = state.connection.lock().await;
-    match conn.as_ref() {
-        Some(ConnectionKind::Serial(c)) => Json(StatusResponse {
-            connected: true,
-            connection_type: Some("serial".to_string()),
-            port: Some(c.port_name.clone()),
-            config: Some(c.config.clone()),
-            ssh_config: None,
-        }),
-        Some(ConnectionKind::Ssh(c)) => Json(StatusResponse {
-            connected: true,
-            connection_type: Some("ssh".to_string()),
-            port: Some(format!("ssh://{}:{}", c.config.host, c.config.port)),
-            config: None,
-            ssh_config: Some(SshStatusConfig {
-                host: c.config.host.clone(),
-                port: c.config.port,
-                username: c.config.username.clone(),
-            }),
-        }),
-        None => Json(StatusResponse {
-            connected: false,
-            connection_type: None,
-            port: None,
-            config: None,
-            ssh_config: None,
-        }),
+#[derive(Deserialize)]
+struct TabIdQuery {
+    tab_id: Option<String>,
+}
+
+async fn status(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TabIdQuery>,
+) -> impl IntoResponse {
+    let connections = state.connections.lock().await;
+
+    if let Some(tab_id) = query.tab_id {
+        // Return status for a specific tab
+        match connections.get(&tab_id) {
+            Some(conn_state) => {
+                match &conn_state.connection {
+                    ConnectionKind::Serial(c) => Json(StatusResponse {
+                        connected: true,
+                        connection_type: Some("serial".to_string()),
+                        port: Some(c.port_name.clone()),
+                        config: Some(c.config.clone()),
+                        ssh_config: None,
+                    }).into_response(),
+                    ConnectionKind::Ssh(c) => Json(StatusResponse {
+                        connected: true,
+                        connection_type: Some("ssh".to_string()),
+                        port: Some(format!("ssh://{}:{}", c.config.host, c.config.port)),
+                        config: None,
+                        ssh_config: Some(SshStatusConfig {
+                            host: c.config.host.clone(),
+                            port: c.config.port,
+                            username: c.config.username.clone(),
+                        }),
+                    }).into_response(),
+                }
+            }
+            None => Json(StatusResponse {
+                connected: false,
+                connection_type: None,
+                port: None,
+                config: None,
+                ssh_config: None,
+            }).into_response(),
+        }
+    } else {
+        // Return status for all tabs
+        let mut entries: Vec<TabStatusEntry> = Vec::new();
+        for (tab_id, conn_state) in connections.iter() {
+            match &conn_state.connection {
+                ConnectionKind::Serial(c) => entries.push(TabStatusEntry {
+                    tab_id: tab_id.clone(),
+                    connected: true,
+                    connection_type: Some("serial".to_string()),
+                    port: Some(c.port_name.clone()),
+                    config: Some(c.config.clone()),
+                    ssh_config: None,
+                }),
+                ConnectionKind::Ssh(c) => entries.push(TabStatusEntry {
+                    tab_id: tab_id.clone(),
+                    connected: true,
+                    connection_type: Some("ssh".to_string()),
+                    port: Some(format!("ssh://{}:{}", c.config.host, c.config.port)),
+                    config: None,
+                    ssh_config: Some(SshStatusConfig {
+                        host: c.config.host.clone(),
+                        port: c.config.port,
+                        username: c.config.username.clone(),
+                    }),
+                }),
+            }
+        }
+        Json(entries).into_response()
     }
 }
 
@@ -440,16 +572,38 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    Query(query): Query<TabIdQuery>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+    let tab_id = query.tab_id.unwrap_or_default();
+    ws.on_upgrade(move |socket| handle_ws(socket, state, tab_id))
 }
 
-async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_ws(socket: WebSocket, state: Arc<AppState>, tab_id: String) {
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Get broadcast_tx and scrollback for this tab
+    let (broadcast_tx, scrollback, zmodem_active, log_file_for_send) = {
+        let connections = state.connections.lock().await;
+        match connections.get(&tab_id) {
+            Some(conn_state) => (
+                conn_state.broadcast_tx.clone(),
+                conn_state.scrollback.clone(),
+                conn_state.zmodem_active.clone(),
+                // We cannot hold a reference to log_file across await, so we skip it here
+                // and handle logging via state lookup in the send task
+                (),
+            ),
+            None => {
+                tracing::warn!("WebSocket connected for unknown tab_id: {}", tab_id);
+                let _ = ws_tx.send(Message::Close(None)).await;
+                return;
+            }
+        }
+    };
 
     // Send scrollback buffer first so client sees previous output
     {
-        let sb = state.scrollback.lock().await;
+        let sb = scrollback.lock().await;
         if !sb.is_empty() {
             let data: Vec<u8> = sb.iter().copied().collect();
             if ws_tx.send(Message::Binary(data.into())).await.is_err() {
@@ -459,43 +613,51 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     }
 
     // Subscribe to broadcast for serial RX data
-    let mut broadcast_rx = state.broadcast_tx.subscribe();
+    let mut broadcast_rx = broadcast_tx.subscribe();
 
     // Get a clone of the mpsc sender for writing (serial or SSH)
-    let get_write_tx = |state: &Arc<AppState>| {
+    let get_write_tx = |state: &Arc<AppState>, tab_id: &str| {
         let state = state.clone();
+        let tab_id = tab_id.to_string();
         async move {
-            let conn = state.connection.lock().await;
-            match conn.as_ref() {
-                Some(ConnectionKind::Serial(c)) => Some(c.tx_to_serial.clone()),
-                Some(ConnectionKind::Ssh(c)) => Some(c.tx_to_ssh.clone()),
+            let connections = state.connections.lock().await;
+            match connections.get(&tab_id) {
+                Some(conn_state) => match &conn_state.connection {
+                    ConnectionKind::Serial(c) => Some(c.tx_to_serial.clone()),
+                    ConnectionKind::Ssh(c) => Some(c.tx_to_ssh.clone()),
+                },
                 None => None,
             }
         }
     };
 
     // Get the resize sender for SSH connections
-    let get_resize_tx = |state: &Arc<AppState>| {
+    let get_resize_tx = |state: &Arc<AppState>, tab_id: &str| {
         let state = state.clone();
+        let tab_id = tab_id.to_string();
         async move {
-            let conn = state.connection.lock().await;
-            match conn.as_ref() {
-                Some(ConnectionKind::Ssh(c)) => Some(c.resize_tx.clone()),
-                _ => None,
+            let connections = state.connections.lock().await;
+            match connections.get(&tab_id) {
+                Some(conn_state) => match &conn_state.connection {
+                    ConnectionKind::Ssh(c) => Some(c.resize_tx.clone()),
+                    _ => None,
+                },
+                None => None,
             }
         }
     };
 
+    let _ = log_file_for_send;
+
     // Task A: broadcast (serial RX) -> WebSocket (with ZMODEM filtering)
-    let zmodem_active_for_send = state.zmodem_active.clone();
-    let log_file_for_send = state.log_file.clone();
+    let zmodem_active_for_send = zmodem_active.clone();
+    let state_for_log = state.clone();
+    let tab_id_for_log = tab_id.clone();
     let mut send_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
                 Ok(data) => {
                     // Always intercept ZMODEM notifications (sent as Text frames)
-                    // regardless of zmodem_active state, so "completed" notifications
-                    // arrive as Text frames that the frontend can parse.
                     if data.starts_with(b"\x1b]zmodem;") {
                         if ws_tx
                             .send(Message::Text(
@@ -514,9 +676,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     }
                     // Write raw data to log file if logging is active
                     {
-                        let mut log = log_file_for_send.lock().await;
-                        if let Some((_, ref mut file)) = *log {
-                            let _ = file.write_all(&data).await;
+                        let mut connections = state_for_log.connections.lock().await;
+                        if let Some(conn_state) = connections.get_mut(&tab_id_for_log) {
+                            if let Some((_, ref mut file)) = conn_state.log_file {
+                                let _ = file.write_all(&data).await;
+                            }
                         }
                     }
                     if ws_tx.send(Message::Binary(data.into())).await.is_err() {
@@ -535,7 +699,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
     // Task B: WebSocket -> serial TX (via mpsc) — blocked during ZMODEM
     let state_clone = state.clone();
-    let zmodem_active_for_recv = state.zmodem_active.clone();
+    let tab_id_clone = tab_id.clone();
+    let zmodem_active_for_recv = zmodem_active.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
@@ -544,7 +709,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     if zmodem_active_for_recv.load(Ordering::Relaxed) {
                         continue;
                     }
-                    if let Some(tx) = get_write_tx(&state_clone).await {
+                    if let Some(tx) = get_write_tx(&state_clone, &tab_id_clone).await {
                         if tx.send(data.to_vec()).await.is_err() {
                             tracing::error!("Failed to send data to serial writer");
                             break;
@@ -559,7 +724,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                                 val.get("cols").and_then(|v| v.as_u64()),
                                 val.get("rows").and_then(|v| v.as_u64()),
                             ) {
-                                if let Some(resize_tx) = get_resize_tx(&state_clone).await {
+                                if let Some(resize_tx) = get_resize_tx(&state_clone, &tab_id_clone).await {
                                     let _ = resize_tx.send((cols as u32, rows as u32)).await;
                                 }
                             }
@@ -567,7 +732,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     // Not a resize message — forward as data
-                    if let Some(tx) = get_write_tx(&state_clone).await {
+                    if let Some(tx) = get_write_tx(&state_clone, &tab_id_clone).await {
                         if tx.send(text.as_bytes().to_vec()).await.is_err() {
                             tracing::error!("Failed to send data to serial writer");
                             break;
@@ -590,7 +755,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    tracing::info!("WebSocket connection closed");
+    tracing::info!("WebSocket connection closed (tab {})", tab_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -599,27 +764,38 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
 async fn zmodem_list_files(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<TabIdQuery>,
 ) -> impl IntoResponse {
-    let files = state.zmodem_files.lock().await;
-    let names: Vec<String> = files
-        .iter()
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .collect();
+    let connections = state.connections.lock().await;
+    let tab_id = query.tab_id.unwrap_or_default();
+    let names: Vec<String> = match connections.get(&tab_id) {
+        Some(conn_state) => conn_state.zmodem_files
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect(),
+        None => Vec::new(),
+    };
     Json(serde_json::json!({ "files": names }))
 }
 
 async fn zmodem_download_file(
     State(state): State<Arc<AppState>>,
     AxumPath(filename): AxumPath<String>,
+    Query(query): Query<TabIdQuery>,
 ) -> impl IntoResponse {
-    let files = state.zmodem_files.lock().await;
-    let found = files.iter().find(|p| {
-        p.file_name()
-            .map(|n| n.to_string_lossy() == filename)
-            .unwrap_or(false)
+    let connections = state.connections.lock().await;
+    let tab_id = query.tab_id.unwrap_or_default();
+    let found_path = connections.get(&tab_id).and_then(|conn_state| {
+        conn_state.zmodem_files.iter().find(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy() == filename)
+                .unwrap_or(false)
+        }).cloned()
     });
-    match found {
-        Some(path) => match tokio::fs::read(path).await {
+    drop(connections);
+
+    match found_path {
+        Some(path) => match tokio::fs::read(&path).await {
             Ok(data) => (
                 StatusCode::OK,
                 [
@@ -661,6 +837,7 @@ async fn zmodem_download_file(
 
 #[derive(Deserialize)]
 struct LogStartRequest {
+    tab_id: String,
     path: String,
 }
 
@@ -674,8 +851,22 @@ async fn log_start(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LogStartRequest>,
 ) -> impl IntoResponse {
-    let mut log = state.log_file.lock().await;
-    if log.is_some() {
+    let mut connections = state.connections.lock().await;
+
+    let conn_state = match connections.get_mut(&req.tab_id) {
+        Some(cs) => cs,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    ok: false,
+                    message: "No connection for this tab".to_string(),
+                }),
+            );
+        }
+    };
+
+    if conn_state.log_file.is_some() {
         return (
             StatusCode::CONFLICT,
             Json(ApiResponse {
@@ -703,8 +894,8 @@ async fn log_start(
         .await
     {
         Ok(file) => {
-            tracing::info!("Started logging to {}", path);
-            *log = Some((path.clone(), file));
+            tracing::info!("Started logging to {} (tab {})", path, req.tab_id);
+            conn_state.log_file = Some((path.clone(), file));
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -726,13 +917,33 @@ async fn log_start(
     }
 }
 
+#[derive(Deserialize)]
+struct LogStopRequest {
+    tab_id: String,
+}
+
 async fn log_stop(
     State(state): State<Arc<AppState>>,
+    Json(req): Json<LogStopRequest>,
 ) -> impl IntoResponse {
-    let mut log = state.log_file.lock().await;
-    match log.take() {
+    let mut connections = state.connections.lock().await;
+
+    let conn_state = match connections.get_mut(&req.tab_id) {
+        Some(cs) => cs,
+        None => {
+            return (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    ok: true,
+                    message: "Not logging".to_string(),
+                }),
+            );
+        }
+    };
+
+    match conn_state.log_file.take() {
         Some((path, _file)) => {
-            tracing::info!("Stopped logging to {}", path);
+            tracing::info!("Stopped logging to {} (tab {})", path, req.tab_id);
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -753,13 +964,22 @@ async fn log_stop(
 
 async fn log_status(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<TabIdQuery>,
 ) -> impl IntoResponse {
-    let log = state.log_file.lock().await;
-    match log.as_ref() {
-        Some((path, _)) => Json(LogStatusResponse {
-            active: true,
-            path: Some(path.clone()),
-        }),
+    let connections = state.connections.lock().await;
+    let tab_id = query.tab_id.unwrap_or_default();
+
+    match connections.get(&tab_id) {
+        Some(conn_state) => match &conn_state.log_file {
+            Some((path, _)) => Json(LogStatusResponse {
+                active: true,
+                path: Some(path.clone()),
+            }),
+            None => Json(LogStatusResponse {
+                active: false,
+                path: None,
+            }),
+        },
         None => Json(LogStatusResponse {
             active: false,
             path: None,
@@ -768,16 +988,19 @@ async fn log_status(
 }
 
 // ---------------------------------------------------------------------------
-// ZMODEM interceptor task
+// ZMODEM interceptor task (per-tab)
 // ---------------------------------------------------------------------------
 
-/// Spawn a task that subscribes to the broadcast channel, detects ZMODEM
+/// Spawn a task that subscribes to the tab's broadcast channel, detects ZMODEM
 /// init sequences, and handles the transfer using a pure Rust ZMODEM receiver.
-/// During ZMODEM mode, data is routed to the receiver instead of WebSocket clients.
-/// Receiver responses are sent back through the write channel.
-fn spawn_zmodem_interceptor(state: Arc<AppState>) {
-    let mut broadcast_rx = state.broadcast_tx.subscribe();
-    let state = state.clone();
+fn spawn_zmodem_interceptor_for_tab(
+    tab_id: String,
+    broadcast_tx: broadcast::Sender<Vec<u8>>,
+    zmodem_active: Arc<AtomicBool>,
+    zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    state: Arc<AppState>,
+) {
+    let mut broadcast_rx = broadcast_tx.subscribe();
 
     tokio::spawn(async move {
         loop {
@@ -788,7 +1011,7 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
             };
 
             // Only scan when not already in ZMODEM mode
-            if state.zmodem_active.load(Ordering::Relaxed) {
+            if zmodem_active.load(Ordering::Relaxed) {
                 continue;
             }
 
@@ -796,23 +1019,22 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                 continue;
             }
 
-            tracing::info!("ZMODEM init sequence detected, starting receive");
+            tracing::info!("ZMODEM init sequence detected (tab {}), starting receive", tab_id);
 
             // Save to ~/Downloads
             let download_dir = dirs::download_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"));
-            // Create the pure Rust ZMODEM receiver
             let mut receiver = zmodem::ZmodemReceiver::new(download_dir);
 
             // Set up an mpsc channel for routing data to the ZMODEM handler
             let (zmodem_tx, mut zmodem_rx) = mpsc::channel::<Vec<u8>>(256);
 
             // Activate ZMODEM mode
-            state.zmodem_active.store(true, Ordering::SeqCst);
-            *state.zmodem_data_tx_shared.lock().await = Some(zmodem_tx);
+            zmodem_active.store(true, Ordering::SeqCst);
+            *zmodem_data_tx_shared.lock().await = Some(zmodem_tx);
 
             // Notify clients that ZMODEM started
-            let _ = state.broadcast_tx.send(
+            let _ = broadcast_tx.send(
                 format!(
                     "\x1b]zmodem;{}\x07",
                     serde_json::json!({"type":"zmodem","state":"started"})
@@ -822,30 +1044,32 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
 
             // Get write channel for sending responses back to serial/SSH
             let write_tx = {
-                let conn = state.connection.lock().await;
-                match conn.as_ref() {
-                    Some(ConnectionKind::Serial(c)) => Some(c.tx_to_serial.clone()),
-                    Some(ConnectionKind::Ssh(c)) => Some(c.tx_to_ssh.clone()),
+                let connections = state.connections.lock().await;
+                match connections.get(&tab_id) {
+                    Some(conn_state) => match &conn_state.connection {
+                        ConnectionKind::Serial(c) => Some(c.tx_to_serial.clone()),
+                        ConnectionKind::Ssh(c) => Some(c.tx_to_ssh.clone()),
+                    },
                     None => None,
                 }
             };
 
             // Feed initial ZMODEM data to the receiver
-            tracing::info!("ZMODEM: feeding initial {} bytes to receiver", data.len());
+            tracing::info!("ZMODEM: feeding initial {} bytes to receiver (tab {})", data.len(), tab_id);
             let response = receiver.process(&data);
-            tracing::info!("ZMODEM: initial response {} bytes", response.len());
+            tracing::info!("ZMODEM: initial response {} bytes (tab {})", response.len(), tab_id);
             if !response.is_empty() {
                 if let Some(ref tx) = write_tx {
                     match tx.send(response).await {
-                        Ok(_) => tracing::info!("ZMODEM: initial response sent to write channel"),
-                        Err(e) => tracing::error!("ZMODEM: failed to send initial response: {}", e),
+                        Ok(_) => tracing::info!("ZMODEM: initial response sent to write channel (tab {})", tab_id),
+                        Err(e) => tracing::error!("ZMODEM: failed to send initial response (tab {}): {}", tab_id, e),
                     }
                 } else {
-                    tracing::error!("ZMODEM: no write_tx available!");
+                    tracing::error!("ZMODEM: no write_tx available (tab {})!", tab_id);
                 }
             }
 
-            tracing::info!("ZMODEM: entering receive loop, waiting for data on zmodem_rx");
+            tracing::info!("ZMODEM: entering receive loop (tab {})", tab_id);
 
             // Process incoming data through the receiver
             let transfer_start = std::time::Instant::now();
@@ -856,7 +1080,7 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                 if !response.is_empty() {
                     if let Some(ref tx) = write_tx {
                         if let Err(e) = tx.send(response).await {
-                            tracing::error!("ZMODEM: write_tx send failed: {}", e);
+                            tracing::error!("ZMODEM: write_tx send failed (tab {}): {}", tab_id, e);
                             break;
                         }
                     }
@@ -865,7 +1089,7 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                 // Check if a file just completed
                 if let Some(completed) = receiver.take_completed() {
                     let file_elapsed = file_start.elapsed().as_millis() as u64;
-                    let _ = state.broadcast_tx.send(
+                    let _ = broadcast_tx.send(
                         format!(
                             "\x1b]zmodem;{}\x07",
                             serde_json::json!({
@@ -878,7 +1102,6 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                         )
                         .into_bytes(),
                     );
-                    // Reset file timer for next file
                     file_start = std::time::Instant::now();
                 }
 
@@ -886,7 +1109,7 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                 if last_progress_time.elapsed() >= std::time::Duration::from_millis(200) {
                     last_progress_time = std::time::Instant::now();
                     if let Some(filename) = receiver.current_filename() {
-                        let _ = state.broadcast_tx.send(
+                        let _ = broadcast_tx.send(
                             format!(
                                 "\x1b]zmodem;{}\x07",
                                 serde_json::json!({
@@ -918,24 +1141,30 @@ fn spawn_zmodem_interceptor(state: Arc<AppState>) {
                 .collect();
 
             tracing::info!(
-                "ZMODEM transfer complete, received {} files: {:?}",
+                "ZMODEM transfer complete (tab {}), received {} files: {:?}",
+                tab_id,
                 files.len(),
                 file_names
             );
 
-            // Store files
-            *state.zmodem_files.lock().await = files;
+            // Store files in the tab's connection state
+            {
+                let mut connections = state.connections.lock().await;
+                if let Some(conn_state) = connections.get_mut(&tab_id) {
+                    conn_state.zmodem_files = files;
+                }
+            }
 
             // Deactivate ZMODEM mode
-            *state.zmodem_data_tx_shared.lock().await = None;
-            state.zmodem_active.store(false, Ordering::SeqCst);
+            *zmodem_data_tx_shared.lock().await = None;
+            zmodem_active.store(false, Ordering::SeqCst);
 
             // Compute transfer stats
             let elapsed_ms = transfer_start.elapsed().as_millis() as u64;
             let total_bytes: u64 = receiver.total_bytes();
 
             // Notify clients
-            let _ = state.broadcast_tx.send(
+            let _ = broadcast_tx.send(
                 format!(
                     "\x1b]zmodem;{}\x07",
                     serde_json::json!({
@@ -990,20 +1219,9 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 async fn start_axum_server() {
-    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(1024);
-
     let state = Arc::new(AppState {
-        connection: Mutex::new(None),
-        broadcast_tx,
-        scrollback: Arc::new(Mutex::new(VecDeque::new())),
-        zmodem_active: Arc::new(AtomicBool::new(false)),
-        zmodem_data_tx_shared: Arc::new(Mutex::new(None)),
-        zmodem_files: Mutex::new(Vec::new()),
-        log_file: Arc::new(Mutex::new(None)),
+        connections: Mutex::new(HashMap::new()),
     });
-
-    // Spawn ZMODEM interceptor that monitors broadcast for ZMODEM init sequences
-    spawn_zmodem_interceptor(state.clone());
 
     let cors = CorsLayer::very_permissive();
 

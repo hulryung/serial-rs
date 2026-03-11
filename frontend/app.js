@@ -2,6 +2,7 @@
   // Backend server URL (Axum serves API and WebSocket)
   const API_BASE = 'http://localhost:3000';
   const WS_BASE = 'ws://localhost:3000';
+  const MAX_TABS = 10;
 
   // DOM elements - Serial
   const portSelect = document.getElementById('port-select');
@@ -29,7 +30,7 @@
   // DOM elements - Shared
   const connectBtn = document.getElementById('connect-btn');
   const statusIndicator = document.getElementById('status-indicator');
-  const terminalContainer = document.getElementById('terminal-container');
+  const terminalWrapper = document.getElementById('terminal-wrapper');
   const statusbarPort = document.getElementById('statusbar-port');
 
   const sessionsBtn = document.getElementById('sessions-btn');
@@ -76,19 +77,40 @@
   var logStartBtn = document.getElementById('log-start-btn');
   var statusbarLogPath = document.getElementById('statusbar-log-path');
 
+  // DOM elements - Tab bar
+  var tabList = document.getElementById('tab-list');
+  var tabAddBtn = document.getElementById('tab-add-btn');
+
   // State
-  var term = null;
-  var ws = null;
-  var fitAddon = null;
-  var searchAddon = null;
-  var onDataDisposable = null;
-  var connected = false;
   var currentMode = 'serial';
   var activeSessionId = null;
-  var settingsContext = null; // { mode: 'defaults' } or { mode: 'session', sessionId: '...' }
-  var loggingActive = false;
-  var loggingPath = null;
+  var settingsContext = null;
   var collapsedFolders = {};
+
+  // -----------------------------------------------------------------------
+  // Multi-tab state
+  // -----------------------------------------------------------------------
+
+  // Each tab: { id, label, term, ws, fitAddon, searchAddon, onDataDisposable,
+  //             connected, mode, containerEl, loggingActive, loggingPath,
+  //             zmodemFileStart, zmodemFileCount }
+  var tabs = [];
+  var activeTabId = null;
+
+  function genTabId() {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+  }
+
+  function findTab(tabId) {
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].id === tabId) return tabs[i];
+    }
+    return null;
+  }
+
+  function getActiveTab() {
+    return findTab(activeTabId);
+  }
 
   // -----------------------------------------------------------------------
   // Defaults & Sessions data layer
@@ -116,7 +138,6 @@
       var saved = JSON.parse(localStorage.getItem('serial-rs-defaults'));
       if (saved) return Object.assign({}, DEFAULT_SETTINGS, saved);
     } catch (e) {}
-    // Migrate from old settings format
     try {
       var old = JSON.parse(localStorage.getItem('serial-rs-settings'));
       if (old) {
@@ -147,16 +168,13 @@
     localStorage.setItem('serial-rs-sessions', JSON.stringify(sessions));
   }
 
-  // Resolve a session's effective settings (null visual fields → defaults)
   function resolveSession(session) {
     var r = {};
-    // Visual fields: inherit from defaults if null
     var visualFields = ['fontSize', 'fontFamily', 'themeBackground', 'themeForeground',
                         'themeCursor', 'themeSelection'];
     visualFields.forEach(function(f) {
       r[f] = (session[f] !== null && session[f] !== undefined) ? session[f] : defaults[f];
     });
-    // Connection fields: per-session only, no inheritance
     r.host = session.host || '';
     r.port = session.port || '';
     r.username = session.username || '';
@@ -303,12 +321,29 @@
   }
 
   // -----------------------------------------------------------------------
-  // Terminal
+  // Tab management
   // -----------------------------------------------------------------------
 
-  function initTerminal(ts) {
-    ts = ts || defaults;
-    term = new Terminal({
+  function createTab(label, settings) {
+    if (tabs.length >= MAX_TABS) {
+      var active = getActiveTab();
+      if (active && active.term) {
+        active.term.writeln('\r\n[Error] Maximum of ' + MAX_TABS + ' tabs reached');
+      }
+      return null;
+    }
+
+    var ts = settings || defaults;
+    var id = genTabId();
+
+    // Create terminal container div
+    var containerEl = document.createElement('div');
+    containerEl.className = 'terminal-pane';
+    containerEl.setAttribute('data-tab-id', id);
+    terminalWrapper.appendChild(containerEl);
+
+    // Create Terminal instance
+    var term = new Terminal({
       cursorBlink: true,
       theme: {
         background: ts.themeBackground,
@@ -320,36 +355,163 @@
       fontFamily: ts.fontFamily,
     });
 
-    fitAddon = new FitAddon.FitAddon();
+    var fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    searchAddon = new SearchAddon.SearchAddon();
+    var searchAddon = new SearchAddon.SearchAddon();
     term.loadAddon(searchAddon);
 
-    term.open(terminalContainer);
-    fitAddon.fit();
+    term.open(containerEl);
+
+    var tab = {
+      id: id,
+      label: label || 'New Tab',
+      term: term,
+      ws: null,
+      fitAddon: fitAddon,
+      searchAddon: searchAddon,
+      onDataDisposable: null,
+      connected: false,
+      mode: currentMode,
+      containerEl: containerEl,
+      loggingActive: false,
+      loggingPath: null,
+      zmodemFileStart: 0,
+      zmodemFileCount: 0
+    };
+
+    // SSH resize handler per-tab
+    term.onResize(function(size) {
+      if (tab.ws && tab.ws.readyState === WebSocket.OPEN && tab.mode === 'ssh') {
+        tab.ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+      }
+    });
+
+    tabs.push(tab);
+    switchToTab(id);
 
     term.writeln('Serial Terminal Ready.');
     term.writeln('Select a port and click Connect.');
 
-    term.onResize(function(size) {
-      if (ws && ws.readyState === WebSocket.OPEN && currentMode === 'ssh') {
-        ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+    renderTabBar();
+    return tab;
+  }
+
+  function switchToTab(tabId) {
+    var tab = findTab(tabId);
+    if (!tab) return;
+
+    activeTabId = tabId;
+
+    // Hide all terminal panes, show active
+    tabs.forEach(function(t) {
+      t.containerEl.classList.toggle('active', t.id === tabId);
+    });
+
+    // Fit the active terminal
+    setTimeout(function() {
+      if (tab.fitAddon) {
+        try { tab.fitAddon.fit(); } catch (e) {}
       }
+    }, 10);
+
+    // Update mode for toolbar
+    currentMode = tab.mode;
+    switchMode(currentMode);
+
+    // Update toolbar state based on this tab's connection
+    updateUI();
+    renderTabBar();
+    updateLogUI();
+
+    // Focus the terminal
+    if (tab.term) tab.term.focus();
+  }
+
+  function closeTab(tabId) {
+    var tab = findTab(tabId);
+    if (!tab) return;
+
+    // Disconnect if connected
+    if (tab.connected) {
+      disconnectTab(tab);
+    }
+
+    // Dispose terminal
+    if (tab.onDataDisposable) { tab.onDataDisposable.dispose(); tab.onDataDisposable = null; }
+    if (tab.ws) { tab.ws.onopen = null; tab.ws.onclose = null; tab.ws.onerror = null; tab.ws.close(); tab.ws = null; }
+    if (tab.term) { tab.term.dispose(); tab.term = null; }
+    if (tab.containerEl && tab.containerEl.parentNode) {
+      tab.containerEl.parentNode.removeChild(tab.containerEl);
+    }
+
+    // Remove from array
+    tabs = tabs.filter(function(t) { return t.id !== tabId; });
+
+    // If we closed the active tab, switch to another
+    if (activeTabId === tabId) {
+      if (tabs.length > 0) {
+        switchToTab(tabs[tabs.length - 1].id);
+      } else {
+        activeTabId = null;
+        // Create a new default tab
+        createTab('New Tab');
+      }
+    }
+
+    renderTabBar();
+  }
+
+  function renderTabBar() {
+    tabList.innerHTML = '';
+    tabs.forEach(function(tab) {
+      var el = document.createElement('div');
+      el.className = 'tab-item' + (tab.id === activeTabId ? ' active' : '') + (tab.connected ? ' connected' : '');
+
+      var status = document.createElement('span');
+      status.className = 'tab-status';
+
+      var label = document.createElement('span');
+      label.className = 'tab-label';
+      label.textContent = tab.label;
+
+      var close = document.createElement('button');
+      close.className = 'tab-close';
+      close.textContent = '\u00D7';
+      close.title = 'Close tab';
+      close.addEventListener('click', function(e) {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+
+      el.appendChild(status);
+      el.appendChild(label);
+      el.appendChild(close);
+
+      el.addEventListener('click', function() {
+        switchToTab(tab.id);
+      });
+
+      tabList.appendChild(el);
     });
   }
 
+  // -----------------------------------------------------------------------
+  // Terminal settings
+  // -----------------------------------------------------------------------
+
   function applyTerminalSettings(ts) {
-    if (!term) return;
-    term.options.fontSize = ts.fontSize;
-    term.options.fontFamily = ts.fontFamily;
-    term.options.theme = {
+    var tab = getActiveTab();
+    if (!tab || !tab.term) return;
+    tab.term.options.fontSize = ts.fontSize;
+    tab.term.options.fontFamily = ts.fontFamily;
+    tab.term.options.theme = {
       background: ts.themeBackground,
       foreground: ts.themeForeground,
       cursor: ts.themeCursor,
       selectionBackground: ts.themeSelection,
     };
-    if (fitAddon) fitAddon.fit();
+    if (tab.fitAddon) tab.fitAddon.fit();
   }
 
   // -----------------------------------------------------------------------
@@ -373,16 +535,14 @@
       });
     } catch (e) {
       console.error('Failed to fetch ports:', e);
-      if (term) term.writeln('\r\n[Error] Failed to fetch port list');
+      var tab = getActiveTab();
+      if (tab && tab.term) tab.term.writeln('\r\n[Error] Failed to fetch port list');
     }
   }
 
   // -----------------------------------------------------------------------
   // ZMODEM inline progress
   // -----------------------------------------------------------------------
-
-  var zmodemFileStart = 0;
-  var zmodemFileCount = 0;
 
   function formatBytes(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -391,38 +551,38 @@
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   }
 
-  function handleZmodemNotification(str) {
+  function handleZmodemNotification(tab, str) {
     var match = str.match(/\x1b\]zmodem;(.*?)\x07/);
     if (!match) return;
     try {
       var msg = JSON.parse(match[1]);
       if (msg.state === 'started') {
-        zmodemFileCount = 0;
-        zmodemFileStart = Date.now();
-        term.write('\r\n');
+        tab.zmodemFileCount = 0;
+        tab.zmodemFileStart = Date.now();
+        tab.term.write('\r\n');
       } else if (msg.state === 'progress') {
-        var elapsed = (Date.now() - zmodemFileStart) / 1000;
+        var elapsed = (Date.now() - tab.zmodemFileStart) / 1000;
         var speed = elapsed > 0 ? (msg.received || 0) / elapsed : 0;
         var pct = msg.total > 0 ? Math.min(100, Math.round(((msg.received || 0) / msg.total) * 100)) : 0;
-        term.write('\r\x1b[K' + (msg.filename || '') + '  ' + pct + '%  ' +
+        tab.term.write('\r\x1b[K' + (msg.filename || '') + '  ' + pct + '%  ' +
           formatBytes(msg.received || 0) + '/' + formatBytes(msg.total || 0) +
           '  ' + formatBytes(speed) + '/s');
       } else if (msg.state === 'file_complete') {
         var sec = (msg.elapsedMs || 0) / 1000;
         var fspeed = sec > 0 ? (msg.size || 0) / sec : 0;
-        term.write('\r\x1b[K');
-        term.writeln((msg.filename || '') + '  ' + formatBytes(msg.size || 0) + '  ' + sec.toFixed(1) + 's  ' + formatBytes(fspeed) + '/s');
-        zmodemFileCount++;
-        zmodemFileStart = Date.now();
+        tab.term.write('\r\x1b[K');
+        tab.term.writeln((msg.filename || '') + '  ' + formatBytes(msg.size || 0) + '  ' + sec.toFixed(1) + 's  ' + formatBytes(fspeed) + '/s');
+        tab.zmodemFileCount++;
+        tab.zmodemFileStart = Date.now();
       } else if (msg.state === 'completed') {
         var elapsedSec = (msg.elapsedMs || 0) / 1000;
         var cspeed = elapsedSec > 0 ? (msg.totalBytes || 0) / elapsedSec : 0;
-        if (zmodemFileCount > 1) {
-          term.writeln('Total: ' + zmodemFileCount + ' files  ' +
+        if (tab.zmodemFileCount > 1) {
+          tab.term.writeln('Total: ' + tab.zmodemFileCount + ' files  ' +
             formatBytes(msg.totalBytes || 0) + '  ' + elapsedSec.toFixed(1) + 's  ' + formatBytes(cspeed) + '/s');
         }
       } else if (msg.state === 'error') {
-        term.writeln('\r\n[ZMODEM Error] ' + (msg.message || 'Unknown error'));
+        tab.term.writeln('\r\n[ZMODEM Error] ' + (msg.message || 'Unknown error'));
       }
     } catch (e) {
       console.error('Failed to parse ZMODEM notification:', e);
@@ -430,93 +590,61 @@
   }
 
   // -----------------------------------------------------------------------
-  // WebSocket
+  // WebSocket (per-tab)
   // -----------------------------------------------------------------------
 
-  function openWebSocket(label) {
-    ws = new WebSocket(WS_BASE + '/ws');
-    ws.binaryType = 'arraybuffer';
+  function openWebSocket(tab, label) {
+    tab.ws = new WebSocket(WS_BASE + '/ws?tab_id=' + encodeURIComponent(tab.id));
+    tab.ws.binaryType = 'arraybuffer';
 
-    ws.onopen = function() {
-      connected = true;
-      updateUI();
-      term.writeln('\r\n[Connected] ' + label);
+    tab.ws.onopen = function() {
+      tab.connected = true;
+      tab.label = label;
+      if (tab.id === activeTabId) updateUI();
+      renderTabBar();
+      tab.term.writeln('\r\n[Connected] ' + label);
 
-      ws.onmessage = function(event) {
+      tab.ws.onmessage = function(event) {
         if (typeof event.data === 'string') {
           if (event.data.indexOf('\x1b]zmodem;') !== -1) {
-            handleZmodemNotification(event.data);
+            handleZmodemNotification(tab, event.data);
             return;
           }
-          term.write(event.data);
+          tab.term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(event.data));
+          tab.term.write(new Uint8Array(event.data));
         }
       };
 
-      onDataDisposable = term.onData(function(data) {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(new TextEncoder().encode(data));
+      tab.onDataDisposable = tab.term.onData(function(data) {
+        if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+          tab.ws.send(new TextEncoder().encode(data));
         }
       });
 
-      if (currentMode === 'ssh') {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      if (tab.mode === 'ssh') {
+        tab.ws.send(JSON.stringify({ type: 'resize', cols: tab.term.cols, rows: tab.term.rows }));
       }
     };
 
-    ws.onclose = function() {
-      if (connected) {
-        connected = false;
-        updateUI();
-        term.writeln('\r\n[Disconnected]');
+    tab.ws.onclose = function() {
+      if (tab.connected) {
+        tab.connected = false;
+        if (tab.id === activeTabId) updateUI();
+        renderTabBar();
+        tab.term.writeln('\r\n[Disconnected]');
       }
     };
 
-    ws.onerror = function(e) {
+    tab.ws.onerror = function(e) {
       console.error('WebSocket error:', e);
-      term.writeln('\r\n[Error] WebSocket error');
+      tab.term.writeln('\r\n[Error] WebSocket error');
     };
   }
 
   // -----------------------------------------------------------------------
   // Connection
   // -----------------------------------------------------------------------
-
-  async function checkAndReconnect() {
-    try {
-      var res = await fetch(API_BASE + '/api/status');
-      var status = await res.json();
-      if (status.connected) {
-        if (status.connection_type === 'ssh') {
-          currentMode = 'ssh';
-          switchMode('ssh');
-          var sc = status.ssh_config;
-          var sshLabel = 'SSH ' + (sc ? sc.username + '@' + sc.host + ':' + sc.port : '');
-          term.writeln('\r\n[Reconnecting] ' + sshLabel + '...');
-          if (sc) {
-            sshHostInput.value = sc.host;
-            sshPortInput.value = sc.port;
-            sshUsernameInput.value = sc.username;
-          }
-          openWebSocket(sshLabel);
-        } else {
-          currentMode = 'serial';
-          switchMode('serial');
-          term.writeln('\r\n[Reconnecting] ' + status.port + '...');
-          if (status.config) {
-            portSelect.value = status.config.port;
-            baudSelect.value = status.config.baud_rate;
-            databitsSelect.value = status.config.data_bits;
-            stopbitsSelect.value = status.config.stop_bits;
-            paritySelect.value = status.config.parity;
-            flowcontrolSelect.value = status.config.flow_control || 'none';
-          }
-          openWebSocket(status.port + ' @ ' + status.config.baud_rate);
-        }
-      }
-    } catch (e) {}
-  }
 
   function showReconnectConfirm() {
     return new Promise(function(resolve) {
@@ -536,13 +664,13 @@
     });
   }
 
-  async function disconnectBackend() {
-    try { await fetch(API_BASE + '/api/disconnect', { method: 'POST' }); } catch (e) {}
+  async function disconnectTabBackend(tab) {
+    try { await fetch(API_BASE + '/api/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab_id: tab.id }) }); } catch (e) {}
   }
 
-  async function handleConflict() {
+  async function handleConflict(tab) {
     if (defaults.alwaysReconnect) {
-      await disconnectBackend();
+      await disconnectTabBackend(tab);
     } else {
       var choice = await showReconnectConfirm();
       if (choice === 'cancel') return false;
@@ -550,16 +678,22 @@
         defaults.alwaysReconnect = true;
         saveDefaults();
       }
-      await disconnectBackend();
+      await disconnectTabBackend(tab);
     }
     return true;
   }
 
   async function connectSerial() {
+    var tab = getActiveTab();
+    if (!tab) return;
+
     var port = portSelect.value;
-    if (!port) { term.writeln('\r\n[Error] Please select a port'); return; }
+    if (!port) { tab.term.writeln('\r\n[Error] Please select a port'); return; }
+
+    tab.mode = 'serial';
 
     var config = {
+      tab_id: tab.id,
       port: port,
       baud_rate: parseInt(baudSelect.value),
       data_bits: parseInt(databitsSelect.value),
@@ -577,7 +711,7 @@
       var result = await res.json();
 
       if (res.status === 409) {
-        if (!(await handleConflict())) return;
+        if (!(await handleConflict(tab))) return;
         res = await fetch(API_BASE + '/api/connect', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -586,24 +720,29 @@
         result = await res.json();
       }
 
-      if (!result.ok) { term.writeln('\r\n[Error] ' + result.message); return; }
-      openWebSocket(port + ' @ ' + config.baud_rate);
+      if (!result.ok) { tab.term.writeln('\r\n[Error] ' + result.message); return; }
+      openWebSocket(tab, port + ' @ ' + config.baud_rate);
     } catch (e) {
-      term.writeln('\r\n[Error] Connection failed: ' + e.message);
+      tab.term.writeln('\r\n[Error] Connection failed: ' + e.message);
     }
   }
 
   async function connectSsh() {
+    var tab = getActiveTab();
+    if (!tab) return;
+
     var host = sshHostInput.value.trim();
     var port = parseInt(sshPortInput.value) || 22;
     var username = sshUsernameInput.value.trim();
     var password = sshPasswordInput.value;
     var keyFile = sshKeyfileInput.value.trim();
 
-    if (!host) { term.writeln('\r\n[Error] Please enter a host'); return; }
-    if (!username) { term.writeln('\r\n[Error] Please enter a username'); return; }
+    if (!host) { tab.term.writeln('\r\n[Error] Please enter a host'); return; }
+    if (!username) { tab.term.writeln('\r\n[Error] Please enter a username'); return; }
 
-    var sshConfig = { host: host, port: port, username: username, password: password, key_file: keyFile || null };
+    tab.mode = 'ssh';
+
+    var sshConfig = { tab_id: tab.id, host: host, port: port, username: username, password: password, key_file: keyFile || null };
 
     try {
       var res = await fetch(API_BASE + '/api/ssh/connect', {
@@ -614,7 +753,7 @@
       var result = await res.json();
 
       if (res.status === 409) {
-        if (!(await handleConflict())) return;
+        if (!(await handleConflict(tab))) return;
         res = await fetch(API_BASE + '/api/ssh/connect', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -623,8 +762,8 @@
         result = await res.json();
       }
 
-      if (!result.ok) { term.writeln('\r\n[Error] ' + result.message); return; }
-      openWebSocket('SSH ' + username + '@' + host + ':' + port);
+      if (!result.ok) { tab.term.writeln('\r\n[Error] ' + result.message); return; }
+      openWebSocket(tab, 'SSH ' + username + '@' + host + ':' + port);
 
       // Ask to save password if not already saved
       if (password) {
@@ -659,7 +798,7 @@
         saveSshInfo(false);
       }
     } catch (e) {
-      term.writeln('\r\n[Error] SSH connection failed: ' + e.message);
+      tab.term.writeln('\r\n[Error] SSH connection failed: ' + e.message);
     }
   }
 
@@ -668,13 +807,20 @@
     else connectSsh();
   }
 
+  function disconnectTab(tab) {
+    tab.connected = false;
+    if (tab.onDataDisposable) { tab.onDataDisposable.dispose(); tab.onDataDisposable = null; }
+    if (tab.ws) { tab.ws.onopen = null; tab.ws.onclose = null; tab.ws.onerror = null; tab.ws.close(); tab.ws = null; }
+    fetch(API_BASE + '/api/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab_id: tab.id }) }).catch(function() {});
+    if (tab.id === activeTabId) updateUI();
+    renderTabBar();
+    if (tab.term) tab.term.writeln('\r\n[Disconnected]');
+  }
+
   async function disconnect() {
-    connected = false;
-    if (onDataDisposable) { onDataDisposable.dispose(); onDataDisposable = null; }
-    if (ws) { ws.onopen = null; ws.onclose = null; ws.onerror = null; ws.close(); ws = null; }
-    try { await fetch(API_BASE + '/api/disconnect', { method: 'POST' }); } catch (e) {}
-    updateUI();
-    term.writeln('\r\n[Disconnected]');
+    var tab = getActiveTab();
+    if (!tab) return;
+    disconnectTab(tab);
   }
 
   // -----------------------------------------------------------------------
@@ -689,10 +835,19 @@
     activeSessionId = sessionId;
     var r = resolveSession(session);
 
-    // Apply terminal theme
-    applyTerminalSettings(r);
+    // If active tab is not connected, reuse it; otherwise create a new tab
+    var tab = getActiveTab();
+    if (!tab || tab.connected) {
+      tab = createTab(session.name, r);
+      if (!tab) return;
+    } else {
+      // Apply terminal theme to existing tab
+      applyTerminalSettings(r);
+      tab.label = session.name;
+    }
 
     // Switch mode and populate toolbar
+    tab.mode = session.type;
     switchMode(session.type);
     if (session.type === 'serial') {
       portSelect.value = session.port || '';
@@ -710,13 +865,7 @@
     }
 
     renderSessionList();
-
-    // If already connected, disconnect first
-    if (connected) {
-      disconnect().then(function() { connect(); });
-    } else {
-      connect();
-    }
+    connect();
   }
 
   // -----------------------------------------------------------------------
@@ -807,7 +956,6 @@
       return;
     }
 
-    // Separate root sessions and folder-grouped sessions
     var rootSessions = [];
     var folderMap = {};
     sessions.forEach(function(s) {
@@ -820,18 +968,15 @@
       }
     });
 
-    // Render root sessions first
     rootSessions.forEach(function(s) {
       sessionList.appendChild(buildSessionItem(s));
     });
 
-    // Render folders alphabetically
     var folderNames = Object.keys(folderMap).sort();
     folderNames.forEach(function(folderName) {
       var isCollapsed = !!collapsedFolders[folderName];
       var folderSessions = folderMap[folderName];
 
-      // Folder header
       var header = document.createElement('div');
       header.className = 'session-folder-header';
 
@@ -856,7 +1001,6 @@
       header.appendChild(nameSpan);
       header.appendChild(countSpan);
 
-      // Folder body
       var body = document.createElement('div');
       body.className = 'session-folder-body' + (isCollapsed ? ' collapsed' : '');
 
@@ -878,7 +1022,6 @@
   // Settings modal
   // -----------------------------------------------------------------------
 
-  // Field mapping for UI/visual defaults only (not connection params)
   var FIELD_MAP = {
     'setting-font-size': { key: 'fontSize', type: 'number' },
     'setting-font-family': { key: 'fontFamily', type: 'text' },
@@ -901,12 +1044,10 @@
     settingsContext = { mode: 'defaults' };
     settingsTitle.textContent = 'Default Settings';
 
-    // Hide "Use default" checkboxes
     document.querySelectorAll('.session-only').forEach(function(el) {
       el.classList.add('hidden');
     });
 
-    // Populate fields from defaults
     Object.keys(FIELD_MAP).forEach(function(elId) {
       var fm = FIELD_MAP[elId];
       var el = document.getElementById(elId);
@@ -950,12 +1091,10 @@
     settingsContext = { mode: 'session', sessionId: sessionId };
     settingsTitle.textContent = 'Session: ' + session.name;
 
-    // Show "Use default" checkboxes and Connection tab
     document.querySelectorAll('.session-only').forEach(function(el) {
       el.classList.remove('hidden');
     });
 
-    // Populate visual/UI fields with "use default" support
     Object.keys(FIELD_MAP).forEach(function(elId) {
       var fm = FIELD_MAP[elId];
       var el = document.getElementById(elId);
@@ -969,7 +1108,6 @@
       el.disabled = isDefault;
     });
 
-    // Populate connection fields based on session type
     var connSerial = document.getElementById('settings-conn-serial');
     var connSsh = document.getElementById('settings-conn-ssh');
     if (session.type === 'serial') {
@@ -990,12 +1128,10 @@
       document.getElementById('setting-ssh-keyfile').value = session.keyFile || '';
     }
 
-    // Folder dropdown
     populateFolderSelect(document.getElementById('setting-folder'), session.folder || '');
     document.getElementById('setting-new-folder-row').classList.add('hidden');
     document.getElementById('setting-new-folder').value = '';
 
-    // General tab behavior checkboxes
     filterCuCheckbox.checked = defaults.filterCuOnly;
     alwaysReconnectCheckbox.checked = defaults.alwaysReconnect;
     rememberSshCheckbox.checked = defaults.rememberSsh;
@@ -1007,13 +1143,11 @@
   function saveSettingsModal() {
     if (!settingsContext) return;
 
-    // Read general tab
     defaults.filterCuOnly = filterCuCheckbox.checked;
     defaults.alwaysReconnect = alwaysReconnectCheckbox.checked;
     defaults.rememberSsh = rememberSshCheckbox.checked;
 
     if (settingsContext.mode === 'defaults') {
-      // Save all fields to defaults
       Object.keys(FIELD_MAP).forEach(function(elId) {
         var fm = FIELD_MAP[elId];
         var el = document.getElementById(elId);
@@ -1025,20 +1159,18 @@
         }
       });
       saveDefaults();
-      // Apply terminal settings live
       applyTerminalSettings(defaults);
     } else if (settingsContext.mode === 'session') {
       var session = findSession(settingsContext.sessionId);
       if (!session) return;
 
-      // Save visual/UI fields (with "use default" support)
       Object.keys(FIELD_MAP).forEach(function(elId) {
         var fm = FIELD_MAP[elId];
         var el = document.getElementById(elId);
         var cb = document.querySelector('.use-default-cb[data-field="' + fm.key + '"]');
         if (!el) return;
         if (cb && cb.checked) {
-          session[fm.key] = null; // use default
+          session[fm.key] = null;
         } else {
           if (fm.type === 'number') {
             session[fm.key] = parseInt(el.value) || defaults[fm.key];
@@ -1048,10 +1180,8 @@
         }
       });
 
-      // Save folder
       session.folder = readFolderValue(document.getElementById('setting-folder'), 'setting-new-folder');
 
-      // Save connection fields directly (per-session, no defaults)
       if (session.type === 'serial') {
         session.port = document.getElementById('setting-port').value;
         session.baudRate = parseInt(document.getElementById('setting-baud').value) || 115200;
@@ -1072,11 +1202,9 @@
       saveDefaults();
       renderSessionList();
 
-      // If this is the active session, apply changes live
       if (activeSessionId === session.id) {
         var r = resolveSession(session);
         applyTerminalSettings(r);
-        // Update toolbar to reflect new connection params
         if (session.type === 'serial') {
           portSelect.value = session.port || '';
           baudSelect.value = r.baudRate;
@@ -1100,7 +1228,6 @@
   document.querySelectorAll('.use-default-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
       var field = cb.getAttribute('data-field');
-      // Find the input in the same .setting-row
       var row = cb.closest('.setting-row');
       if (!row) return;
       var input = row.querySelector('input:not(.use-default-cb), select');
@@ -1176,11 +1303,9 @@
       name: name,
       type: type,
       folder: folder,
-      // Connection-specific
       host: type === 'ssh' ? document.getElementById('new-session-host').value.trim() : null,
       port: type === 'serial' ? document.getElementById('new-session-port').value : null,
       username: type === 'ssh' ? document.getElementById('new-session-username').value.trim() : null,
-      // Serial params from modal (store non-default values, null for defaults)
       baudRate: type === 'serial' ? parseInt(document.getElementById('new-session-baud').value) : null,
       dataBits: type === 'serial' ? parseInt(document.getElementById('new-session-databits').value) : null,
       stopBits: type === 'serial' ? parseInt(document.getElementById('new-session-stopbits').value) : null,
@@ -1188,7 +1313,6 @@
       flowControl: type === 'serial' ? document.getElementById('new-session-flowcontrol').value : null,
       sshPort: type === 'ssh' ? parseInt(document.getElementById('new-session-ssh-port').value) : null,
       keyFile: type === 'ssh' ? (document.getElementById('new-session-keyfile').value.trim() || null) : null,
-      // Visual settings inherit from defaults
       fontSize: null,
       fontFamily: null,
       themeBackground: null,
@@ -1210,13 +1334,16 @@
   // -----------------------------------------------------------------------
 
   function updateUI() {
+    var tab = getActiveTab();
+    var connected = tab ? tab.connected : false;
+
     if (connected) {
       connectBtn.textContent = 'Disconnect';
       connectBtn.classList.add('connected');
       statusIndicator.textContent = 'Connected';
       statusIndicator.className = 'connected';
 
-      if (currentMode === 'serial') {
+      if (tab.mode === 'serial') {
         statusbarPort.textContent = '— ' + portSelect.value + ' @ ' + baudSelect.value;
         portSelect.disabled = true;
         baudSelect.disabled = true;
@@ -1231,7 +1358,7 @@
         sshPasswordInput.disabled = true;
         sshKeyfileInput.disabled = true;
       }
-      modeTabs.forEach(function(tab) { tab.disabled = true; });
+      modeTabs.forEach(function(t) { t.disabled = true; });
     } else {
       connectBtn.textContent = 'Connect';
       connectBtn.classList.remove('connected');
@@ -1249,7 +1376,7 @@
       sshUsernameInput.disabled = false;
       sshPasswordInput.disabled = false;
       sshKeyfileInput.disabled = false;
-      modeTabs.forEach(function(tab) { tab.disabled = false; });
+      modeTabs.forEach(function(t) { t.disabled = false; });
     }
   }
 
@@ -1259,13 +1386,15 @@
 
   modeTabs.forEach(function(tab) {
     tab.addEventListener('click', function() {
-      if (connected) return;
+      var active = getActiveTab();
+      if (active && active.connected) return;
       switchMode(tab.getAttribute('data-mode'));
     });
   });
 
   connectBtn.addEventListener('click', function() {
-    if (connected) disconnect();
+    var tab = getActiveTab();
+    if (tab && tab.connected) disconnect();
     else connect();
   });
 
@@ -1273,7 +1402,8 @@
 
   [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput, sshKeyfileInput].forEach(function(el) {
     el.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !connected) connect();
+      var tab = getActiveTab();
+      if (e.key === 'Enter' && tab && !tab.connected) connect();
     });
   });
 
@@ -1316,11 +1446,19 @@
   setupFolderSelect(document.getElementById('setting-folder'), 'setting-new-folder-row');
 
   // Click terminal to close sidebar
-  terminalContainer.addEventListener('click', closeSidebar);
+  terminalWrapper.addEventListener('click', closeSidebar);
+
+  // Tab bar
+  tabAddBtn.addEventListener('click', function() {
+    createTab('New Tab');
+  });
 
   // Handle window resize
   window.addEventListener('resize', function() {
-    if (fitAddon) fitAddon.fit();
+    var tab = getActiveTab();
+    if (tab && tab.fitAddon) {
+      try { tab.fitAddon.fit(); } catch (e) {}
+    }
   });
 
   // Cmd+R to reload
@@ -1345,8 +1483,9 @@
     searchBar.classList.add('hidden');
     searchCount.textContent = '';
     searchInput.value = '';
-    if (searchAddon) searchAddon.clearDecorations();
-    if (term) term.focus();
+    var tab = getActiveTab();
+    if (tab && tab.searchAddon) tab.searchAddon.clearDecorations();
+    if (tab && tab.term) tab.term.focus();
   }
 
   function updateSearchCount(result) {
@@ -1362,21 +1501,24 @@
   }
 
   function doSearchNext() {
-    if (!searchAddon || !searchInput.value) return;
-    var result = searchAddon.findNext(searchInput.value);
+    var tab = getActiveTab();
+    if (!tab || !tab.searchAddon || !searchInput.value) return;
+    var result = tab.searchAddon.findNext(searchInput.value);
     updateSearchCount(result);
   }
 
   function doSearchPrev() {
-    if (!searchAddon || !searchInput.value) return;
-    var result = searchAddon.findPrevious(searchInput.value);
+    var tab = getActiveTab();
+    if (!tab || !tab.searchAddon || !searchInput.value) return;
+    var result = tab.searchAddon.findPrevious(searchInput.value);
     updateSearchCount(result);
   }
 
   searchInput.addEventListener('input', function() {
     if (!searchInput.value) {
       searchCount.textContent = '';
-      if (searchAddon) searchAddon.clearDecorations();
+      var tab = getActiveTab();
+      if (tab && tab.searchAddon) tab.searchAddon.clearDecorations();
       return;
     }
     doSearchNext();
@@ -1406,7 +1548,7 @@
   });
 
   // -----------------------------------------------------------------------
-  // Session logging
+  // Session logging (per-tab)
   // -----------------------------------------------------------------------
 
   function formatTimestamp() {
@@ -1421,10 +1563,14 @@
   }
 
   function updateLogUI() {
-    if (loggingActive) {
+    var tab = getActiveTab();
+    var active = tab ? tab.loggingActive : false;
+    var path = tab ? tab.loggingPath : null;
+
+    if (active) {
       logBtn.classList.add('logging');
       logBtn.title = 'Stop logging';
-      var displayPath = loggingPath || '';
+      var displayPath = path || '';
       var parts = displayPath.split('/');
       statusbarLogPath.textContent = parts[parts.length - 1];
       statusbarLogPath.title = displayPath;
@@ -1437,27 +1583,36 @@
   }
 
   function refreshLogStatus() {
-    fetch(API_BASE + '/api/log/status')
+    var tab = getActiveTab();
+    if (!tab) return;
+    fetch(API_BASE + '/api/log/status?tab_id=' + encodeURIComponent(tab.id))
       .then(function(res) { return res.json(); })
       .then(function(data) {
-        loggingActive = data.active;
-        loggingPath = data.path || null;
-        updateLogUI();
+        tab.loggingActive = data.active;
+        tab.loggingPath = data.path || null;
+        if (tab.id === activeTabId) updateLogUI();
       })
       .catch(function(err) { console.error('Log status error:', err); });
   }
 
   logBtn.addEventListener('click', function() {
-    if (loggingActive) {
+    var tab = getActiveTab();
+    if (!tab) return;
+
+    if (tab.loggingActive) {
       // Stop logging
-      fetch(API_BASE + '/api/log/stop', { method: 'POST' })
+      fetch(API_BASE + '/api/log/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tab_id: tab.id })
+      })
         .then(function(res) { return res.json(); })
         .then(function(data) {
           if (data.ok) {
-            loggingActive = false;
-            loggingPath = null;
+            tab.loggingActive = false;
+            tab.loggingPath = null;
             updateLogUI();
-            term.writeln('\r\n[Logging stopped]');
+            tab.term.writeln('\r\n[Logging stopped]');
           }
         })
         .catch(function(err) { console.error('Log stop error:', err); });
@@ -1471,21 +1626,24 @@
   });
 
   logStartBtn.addEventListener('click', function() {
+    var tab = getActiveTab();
+    if (!tab) return;
+
     var path = logPathInput.value.trim();
     if (!path) return;
     fetch(API_BASE + '/api/log/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: path })
+      body: JSON.stringify({ tab_id: tab.id, path: path })
     })
       .then(function(res) { return res.json(); })
       .then(function(data) {
         if (data.ok) {
-          loggingActive = true;
-          loggingPath = path;
+          tab.loggingActive = true;
+          tab.loggingPath = path;
           updateLogUI();
           logModal.classList.add('hidden');
-          term.writeln('\r\n[Logging to ' + path + ']');
+          tab.term.writeln('\r\n[Logging to ' + path + ']');
         } else {
           alert(data.message);
         }
@@ -1514,11 +1672,11 @@
   // Initialize
   // -----------------------------------------------------------------------
 
-  initTerminal(defaults);
+  // Create first tab
+  createTab('New Tab');
   refreshPorts();
   applySshInfo();
   renderSessionList();
   if (defaults.sidebarOpen) sessionSidebar.classList.add('open');
-  checkAndReconnect();
   refreshLogStatus();
 })();
