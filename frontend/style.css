@@ -244,6 +244,43 @@ input:disabled { opacity: 0.35; cursor: not-allowed; }
   box-shadow: 0 0 6px rgba(61, 214, 140, 0.4);
 }
 
+/* ---- Log button ---- */
+#log-btn {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+#log-btn:hover { background: var(--bg-hover); border-color: rgba(255,255,255,0.1); }
+#log-btn.logging {
+  color: var(--red);
+  border-color: rgba(240, 90, 90, 0.3);
+}
+#log-btn.logging::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(240, 90, 90, 0.5);
+}
+#statusbar-log-path {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- Search bar ---- */
 #search-bar {
   position: absolute;

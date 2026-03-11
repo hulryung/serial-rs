@@ -67,6 +67,14 @@
   var searchNextBtn = document.getElementById('search-next');
   var searchCloseBtn = document.getElementById('search-close');
 
+  // DOM elements - Logging
+  var logBtn = document.getElementById('log-btn');
+  var logModal = document.getElementById('log-modal');
+  var logModalCloseBtn = document.getElementById('log-modal-close-btn');
+  var logPathInput = document.getElementById('log-path-input');
+  var logStartBtn = document.getElementById('log-start-btn');
+  var statusbarLogPath = document.getElementById('statusbar-log-path');
+
   // State
   var term = null;
   var ws = null;
@@ -77,6 +85,8 @@
   var currentMode = 'serial';
   var activeSessionId = null;
   var settingsContext = null; // { mode: 'defaults' } or { mode: 'session', sessionId: '...' }
+  var loggingActive = false;
+  var loggingPath = null;
 
   // -----------------------------------------------------------------------
   // Defaults & Sessions data layer
@@ -1231,6 +1241,111 @@
   });
 
   // -----------------------------------------------------------------------
+  // Session logging
+  // -----------------------------------------------------------------------
+
+  function formatTimestamp() {
+    var d = new Date();
+    var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() +
+      pad(d.getMonth() + 1) +
+      pad(d.getDate()) + '-' +
+      pad(d.getHours()) +
+      pad(d.getMinutes()) +
+      pad(d.getSeconds());
+  }
+
+  function updateLogUI() {
+    if (loggingActive) {
+      logBtn.classList.add('logging');
+      logBtn.title = 'Stop logging';
+      var displayPath = loggingPath || '';
+      var parts = displayPath.split('/');
+      statusbarLogPath.textContent = parts[parts.length - 1];
+      statusbarLogPath.title = displayPath;
+    } else {
+      logBtn.classList.remove('logging');
+      logBtn.title = 'Toggle session logging';
+      statusbarLogPath.textContent = '';
+      statusbarLogPath.title = '';
+    }
+  }
+
+  function refreshLogStatus() {
+    fetch(API_BASE + '/api/log/status')
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        loggingActive = data.active;
+        loggingPath = data.path || null;
+        updateLogUI();
+      })
+      .catch(function(err) { console.error('Log status error:', err); });
+  }
+
+  logBtn.addEventListener('click', function() {
+    if (loggingActive) {
+      // Stop logging
+      fetch(API_BASE + '/api/log/stop', { method: 'POST' })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            loggingActive = false;
+            loggingPath = null;
+            updateLogUI();
+            term.writeln('\r\n[Logging stopped]');
+          }
+        })
+        .catch(function(err) { console.error('Log stop error:', err); });
+    } else {
+      // Show modal to pick path
+      logPathInput.value = '~/Desktop/serial-rs-' + formatTimestamp() + '.log';
+      logModal.classList.remove('hidden');
+      logPathInput.focus();
+      logPathInput.select();
+    }
+  });
+
+  logStartBtn.addEventListener('click', function() {
+    var path = logPathInput.value.trim();
+    if (!path) return;
+    fetch(API_BASE + '/api/log/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: path })
+    })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          loggingActive = true;
+          loggingPath = path;
+          updateLogUI();
+          logModal.classList.add('hidden');
+          term.writeln('\r\n[Logging to ' + path + ']');
+        } else {
+          alert(data.message);
+        }
+      })
+      .catch(function(err) {
+        console.error('Log start error:', err);
+        alert('Failed to start logging');
+      });
+  });
+
+  logModalCloseBtn.addEventListener('click', function() {
+    logModal.classList.add('hidden');
+  });
+
+  logPathInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      logStartBtn.click();
+    }
+    if (e.key === 'Escape') {
+      logModal.classList.add('hidden');
+    }
+  });
+
+  // -----------------------------------------------------------------------
   // Initialize
   // -----------------------------------------------------------------------
 
@@ -1240,4 +1355,5 @@
   renderSessionList();
   if (defaults.sidebarOpen) sessionSidebar.classList.add('open');
   checkAndReconnect();
+  refreshLogStatus();
 })();

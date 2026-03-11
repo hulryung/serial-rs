@@ -106,6 +106,7 @@ struct AppState {
     zmodem_active: Arc<AtomicBool>,
     zmodem_data_tx_shared: Arc<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
     zmodem_files: Mutex<Vec<PathBuf>>,
+    log_file: Arc<Mutex<Option<(String, tokio::fs::File)>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +488,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
     // Task A: broadcast (serial RX) -> WebSocket (with ZMODEM filtering)
     let zmodem_active_for_send = state.zmodem_active.clone();
+    let log_file_for_send = state.log_file.clone();
     let mut send_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
@@ -509,6 +511,13 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     // During ZMODEM mode, suppress raw transfer data
                     if zmodem_active_for_send.load(Ordering::Relaxed) {
                         continue;
+                    }
+                    // Write raw data to log file if logging is active
+                    {
+                        let mut log = log_file_for_send.lock().await;
+                        if let Some((_, ref mut file)) = *log {
+                            let _ = file.write_all(&data).await;
+                        }
                     }
                     if ws_tx.send(Message::Binary(data.into())).await.is_err() {
                         break;
@@ -643,6 +652,118 @@ async fn zmodem_download_file(
             }),
         )
             .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Log REST handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LogStartRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct LogStatusResponse {
+    active: bool,
+    path: Option<String>,
+}
+
+async fn log_start(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LogStartRequest>,
+) -> impl IntoResponse {
+    let mut log = state.log_file.lock().await;
+    if log.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse {
+                ok: false,
+                message: "Logging already active".to_string(),
+            }),
+        );
+    }
+
+    // Expand ~ to home directory
+    let path = if req.path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(&req.path[2..]).to_string_lossy().to_string()
+        } else {
+            req.path.clone()
+        }
+    } else {
+        req.path.clone()
+    };
+
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await
+    {
+        Ok(file) => {
+            tracing::info!("Started logging to {}", path);
+            *log = Some((path.clone(), file));
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    ok: true,
+                    message: format!("Logging to {}", path),
+                }),
+            )
+        }
+        Err(e) => {
+            tracing::error!("Failed to open log file {}: {}", path, e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    ok: false,
+                    message: format!("Failed to open file: {}", e),
+                }),
+            )
+        }
+    }
+}
+
+async fn log_stop(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mut log = state.log_file.lock().await;
+    match log.take() {
+        Some((path, _file)) => {
+            tracing::info!("Stopped logging to {}", path);
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    ok: true,
+                    message: format!("Stopped logging to {}", path),
+                }),
+            )
+        }
+        None => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                ok: true,
+                message: "Not logging".to_string(),
+            }),
+        ),
+    }
+}
+
+async fn log_status(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let log = state.log_file.lock().await;
+    match log.as_ref() {
+        Some((path, _)) => Json(LogStatusResponse {
+            active: true,
+            path: Some(path.clone()),
+        }),
+        None => Json(LogStatusResponse {
+            active: false,
+            path: None,
+        }),
     }
 }
 
@@ -878,6 +999,7 @@ async fn start_axum_server() {
         zmodem_active: Arc::new(AtomicBool::new(false)),
         zmodem_data_tx_shared: Arc::new(Mutex::new(None)),
         zmodem_files: Mutex::new(Vec::new()),
+        log_file: Arc::new(Mutex::new(None)),
     });
 
     // Spawn ZMODEM interceptor that monitors broadcast for ZMODEM init sequences
@@ -894,6 +1016,9 @@ async fn start_axum_server() {
         .route("/ws", get(ws_handler))
         .route("/api/zmodem/files", get(zmodem_list_files))
         .route("/api/zmodem/download/{filename}", get(zmodem_download_file))
+        .route("/api/log/start", post(log_start))
+        .route("/api/log/stop", post(log_stop))
+        .route("/api/log/status", get(log_status))
         .with_state(state.clone());
 
     // In debug mode, serve frontend files from disk (no restart needed for UI changes).

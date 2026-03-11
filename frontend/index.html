@@ -143,6 +143,25 @@
       </div>
     </div>
 
+    <!-- Log file path modal -->
+    <div id="log-modal" class="settings-overlay hidden">
+      <div class="settings-dialog">
+        <div class="settings-header">
+          <span>Start Logging</span>
+          <button id="log-modal-close-btn" title="Close">&times;</button>
+        </div>
+        <div class="settings-body">
+          <div class="setting-row">
+            <label>File</label>
+            <input type="text" id="log-path-input" class="setting-input-lg" placeholder="~/Desktop/serial-rs.log">
+          </div>
+          <div class="confirm-buttons" style="margin-top: 16px;">
+            <button id="log-start-btn" class="btn-primary">Start</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings / Session edit modal -->
     <div id="settings-modal" class="settings-overlay hidden">
       <div class="settings-dialog settings-dialog-wide">
@@ -408,6 +427,8 @@
       <span id="statusbar-left">
         <span id="status-indicator" class="disconnected">Disconnected</span>
         <span id="statusbar-port"></span>
+        <button id="log-btn" title="Toggle session logging">Log</button>
+        <span id="statusbar-log-path"></span>
       </span>
       <span id="statusbar-right">serial-rs</span>
     </div>
