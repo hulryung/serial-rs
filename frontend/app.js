@@ -58,10 +58,19 @@
   const newSessionSshFields = document.getElementById('new-session-ssh-fields');
   var newSessionTypeValue = 'serial';
 
+  // DOM elements - Search bar
+  var searchBar = document.getElementById('search-bar');
+  var searchInput = document.getElementById('search-input');
+  var searchCount = document.getElementById('search-count');
+  var searchPrevBtn = document.getElementById('search-prev');
+  var searchNextBtn = document.getElementById('search-next');
+  var searchCloseBtn = document.getElementById('search-close');
+
   // State
   var term = null;
   var ws = null;
   var fitAddon = null;
+  var searchAddon = null;
   var onDataDisposable = null;
   var connected = false;
   var currentMode = 'serial';
@@ -161,13 +170,15 @@
     try { return JSON.parse(localStorage.getItem('serial-rs-ssh-info')) || {}; } catch (e) { return {}; }
   }
 
-  function saveSshInfo() {
+  function saveSshInfo(includePassword) {
     if (!defaults.rememberSsh) return;
-    localStorage.setItem('serial-rs-ssh-info', JSON.stringify({
+    var data = {
       host: sshHostInput.value,
       port: parseInt(sshPortInput.value) || 22,
       username: sshUsernameInput.value
-    }));
+    };
+    if (includePassword) data.password = sshPasswordInput.value;
+    localStorage.setItem('serial-rs-ssh-info', JSON.stringify(data));
   }
 
   function applySshInfo() {
@@ -175,6 +186,25 @@
     if (info.host) sshHostInput.value = info.host;
     if (info.port) sshPortInput.value = info.port;
     if (info.username) sshUsernameInput.value = info.username;
+    if (info.password) sshPasswordInput.value = info.password;
+  }
+
+  function showSavePasswordPrompt() {
+    return new Promise(function(resolve) {
+      var modal = document.getElementById('save-password-modal');
+      var yesBtn = document.getElementById('save-password-yes');
+      var noBtn = document.getElementById('save-password-no');
+      modal.classList.remove('hidden');
+      function cleanup() {
+        modal.classList.add('hidden');
+        yesBtn.removeEventListener('click', onYes);
+        noBtn.removeEventListener('click', onNo);
+      }
+      function onYes() { cleanup(); resolve(true); }
+      function onNo() { cleanup(); resolve(false); }
+      yesBtn.addEventListener('click', onYes);
+      noBtn.addEventListener('click', onNo);
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -210,6 +240,10 @@
 
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
+
+    searchAddon = new SearchAddon.SearchAddon();
+    term.loadAddon(searchAddon);
+
     term.open(terminalContainer);
     fitAddon.fit();
 
@@ -505,8 +539,40 @@
       }
 
       if (!result.ok) { term.writeln('\r\n[Error] ' + result.message); return; }
-      saveSshInfo();
       openWebSocket('SSH ' + username + '@' + host + ':' + port);
+
+      // Ask to save password if not already saved
+      if (password) {
+        var alreadySaved = false;
+        if (activeSessionId) {
+          var sess = findSession(activeSessionId);
+          if (sess && sess.password) alreadySaved = true;
+        } else {
+          var info = loadSshInfo();
+          if (info.password) alreadySaved = true;
+        }
+        if (!alreadySaved) {
+          var save = await showSavePasswordPrompt();
+          if (save) {
+            if (activeSessionId) {
+              var sess = findSession(activeSessionId);
+              if (sess) {
+                sess.password = password;
+                sess.updatedAt = Date.now();
+                saveSessions();
+              }
+            } else {
+              saveSshInfo(true);
+            }
+          } else {
+            saveSshInfo(false);
+          }
+        } else {
+          saveSshInfo(activeSessionId ? false : true);
+        }
+      } else {
+        saveSshInfo(false);
+      }
     } catch (e) {
       term.writeln('\r\n[Error] SSH connection failed: ' + e.message);
     }
@@ -553,7 +619,7 @@
       sshHostInput.value = r.host;
       sshPortInput.value = r.sshPort;
       sshUsernameInput.value = r.username;
-      sshPasswordInput.value = '';
+      sshPasswordInput.value = session.password || '';
     }
 
     renderSessionList();
@@ -1079,6 +1145,80 @@
     if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
       e.preventDefault();
       location.reload();
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Terminal search (Cmd+F / Ctrl+F)
+  // -----------------------------------------------------------------------
+
+  function openSearchBar() {
+    searchBar.classList.remove('hidden');
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function closeSearchBar() {
+    searchBar.classList.add('hidden');
+    searchCount.textContent = '';
+    searchInput.value = '';
+    if (searchAddon) searchAddon.clearDecorations();
+    if (term) term.focus();
+  }
+
+  function updateSearchCount(result) {
+    if (!result || result.resultCount === undefined) {
+      searchCount.textContent = '';
+      return;
+    }
+    if (result.resultCount === 0) {
+      searchCount.textContent = 'No results';
+    } else {
+      searchCount.textContent = result.resultIndex + 1 + ' of ' + result.resultCount;
+    }
+  }
+
+  function doSearchNext() {
+    if (!searchAddon || !searchInput.value) return;
+    var result = searchAddon.findNext(searchInput.value);
+    updateSearchCount(result);
+  }
+
+  function doSearchPrev() {
+    if (!searchAddon || !searchInput.value) return;
+    var result = searchAddon.findPrevious(searchInput.value);
+    updateSearchCount(result);
+  }
+
+  searchInput.addEventListener('input', function() {
+    if (!searchInput.value) {
+      searchCount.textContent = '';
+      if (searchAddon) searchAddon.clearDecorations();
+      return;
+    }
+    doSearchNext();
+  });
+
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSearchBar();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) doSearchPrev();
+      else doSearchNext();
+    }
+  });
+
+  searchNextBtn.addEventListener('click', doSearchNext);
+  searchPrevBtn.addEventListener('click', doSearchPrev);
+  searchCloseBtn.addEventListener('click', closeSearchBar);
+
+  // Cmd+F / Ctrl+F to open search
+  window.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+      e.preventDefault();
+      openSearchBar();
     }
   });
 

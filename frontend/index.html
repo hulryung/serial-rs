@@ -122,6 +122,22 @@
       </div>
     </div>
 
+    <!-- Save password prompt -->
+    <div id="save-password-modal" class="settings-overlay hidden">
+      <div class="settings-dialog">
+        <div class="settings-header">
+          <span>Save Password</span>
+        </div>
+        <div class="settings-body">
+          <p class="confirm-message">Save password for this connection?</p>
+          <div class="confirm-buttons">
+            <button id="save-password-yes">Save</button>
+            <button id="save-password-no">No</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings / Session edit modal -->
     <div id="settings-modal" class="settings-overlay hidden">
       <div class="settings-dialog settings-dialog-wide">
@@ -359,6 +375,13 @@
       </div>
     </div>
 
+    <div id="search-bar" class="hidden">
+      <input type="text" id="search-input" placeholder="Find in terminal...">
+      <span id="search-count"></span>
+      <button id="search-prev" title="Previous match (Shift+Enter)">&#x25B2;</button>
+      <button id="search-next" title="Next match (Enter)">&#x25BC;</button>
+      <button id="search-close" title="Close (Escape)">&times;</button>
+    </div>
     <div id="terminal-container"></div>
     <div id="statusbar">
       <span id="statusbar-left">
@@ -371,6 +394,7 @@
 
   <script src="https://unpkg.com/@xterm/xterm@5.5.0/lib/xterm.js"></script>
   <script src="https://unpkg.com/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script src="https://unpkg.com/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
