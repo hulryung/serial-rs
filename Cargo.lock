@@ -4009,6 +4009,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "russh",
+ "russh-keys",
  "rust-embed",
  "serde",
  "serde_json",

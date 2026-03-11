@@ -17,6 +17,7 @@
   const sshPortInput = document.getElementById('ssh-port');
   const sshUsernameInput = document.getElementById('ssh-username');
   const sshPasswordInput = document.getElementById('ssh-password');
+  const sshKeyfileInput = document.getElementById('ssh-keyfile');
 
   // DOM elements - Config wrappers
   const serialConfig = document.getElementById('serial-config');
@@ -163,6 +164,7 @@
     r.parity = session.parity || 'none';
     r.flowControl = session.flowControl || 'none';
     r.sshPort = session.sshPort || 22;
+    r.keyFile = session.keyFile || '';
     return r;
   }
 
@@ -187,7 +189,8 @@
     var data = {
       host: sshHostInput.value,
       port: parseInt(sshPortInput.value) || 22,
-      username: sshUsernameInput.value
+      username: sshUsernameInput.value,
+      keyFile: sshKeyfileInput.value
     };
     if (includePassword) data.password = sshPasswordInput.value;
     localStorage.setItem('serial-rs-ssh-info', JSON.stringify(data));
@@ -199,6 +202,7 @@
     if (info.port) sshPortInput.value = info.port;
     if (info.username) sshUsernameInput.value = info.username;
     if (info.password) sshPasswordInput.value = info.password;
+    if (info.keyFile) sshKeyfileInput.value = info.keyFile;
   }
 
   function showSavePasswordPrompt() {
@@ -528,11 +532,12 @@
     var port = parseInt(sshPortInput.value) || 22;
     var username = sshUsernameInput.value.trim();
     var password = sshPasswordInput.value;
+    var keyFile = sshKeyfileInput.value.trim();
 
     if (!host) { term.writeln('\r\n[Error] Please enter a host'); return; }
     if (!username) { term.writeln('\r\n[Error] Please enter a username'); return; }
 
-    var sshConfig = { host: host, port: port, username: username, password: password };
+    var sshConfig = { host: host, port: port, username: username, password: password, key_file: keyFile || null };
 
     try {
       var res = await fetch(API_BASE + '/api/ssh/connect', {
@@ -635,6 +640,7 @@
       sshPortInput.value = r.sshPort;
       sshUsernameInput.value = r.username;
       sshPasswordInput.value = session.password || '';
+      sshKeyfileInput.value = r.keyFile;
     }
 
     renderSessionList();
@@ -847,6 +853,7 @@
       document.getElementById('setting-ssh-host').value = session.host || '';
       document.getElementById('setting-ssh-port').value = session.sshPort || 22;
       document.getElementById('setting-ssh-username').value = session.username || '';
+      document.getElementById('setting-ssh-keyfile').value = session.keyFile || '';
     }
 
     // General tab behavior checkboxes
@@ -914,6 +921,7 @@
         session.host = document.getElementById('setting-ssh-host').value.trim();
         session.sshPort = parseInt(document.getElementById('setting-ssh-port').value) || 22;
         session.username = document.getElementById('setting-ssh-username').value.trim();
+        session.keyFile = document.getElementById('setting-ssh-keyfile').value.trim() || null;
       }
 
       session.updatedAt = Date.now();
@@ -936,6 +944,7 @@
           sshHostInput.value = r.host;
           sshPortInput.value = r.sshPort;
           sshUsernameInput.value = r.username;
+          sshKeyfileInput.value = r.keyFile;
         }
       }
     }
@@ -1005,6 +1014,7 @@
     document.getElementById('new-session-host').value = '';
     document.getElementById('new-session-ssh-port').value = defaults.sshPort;
     document.getElementById('new-session-username').value = '';
+    document.getElementById('new-session-keyfile').value = '';
     refreshNewSessionPorts();
     newSessionModal.classList.remove('hidden');
   }
@@ -1029,6 +1039,7 @@
       parity: type === 'serial' ? document.getElementById('new-session-parity').value : null,
       flowControl: type === 'serial' ? document.getElementById('new-session-flowcontrol').value : null,
       sshPort: type === 'ssh' ? parseInt(document.getElementById('new-session-ssh-port').value) : null,
+      keyFile: type === 'ssh' ? (document.getElementById('new-session-keyfile').value.trim() || null) : null,
       // Visual settings inherit from defaults
       fontSize: null,
       fontFamily: null,
@@ -1070,6 +1081,7 @@
         sshPortInput.disabled = true;
         sshUsernameInput.disabled = true;
         sshPasswordInput.disabled = true;
+        sshKeyfileInput.disabled = true;
       }
       modeTabs.forEach(function(tab) { tab.disabled = true; });
     } else {
@@ -1088,6 +1100,7 @@
       sshPortInput.disabled = false;
       sshUsernameInput.disabled = false;
       sshPasswordInput.disabled = false;
+      sshKeyfileInput.disabled = false;
       modeTabs.forEach(function(tab) { tab.disabled = false; });
     }
   }
@@ -1110,7 +1123,7 @@
 
   refreshBtn.addEventListener('click', refreshPorts);
 
-  [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput].forEach(function(el) {
+  [sshHostInput, sshPortInput, sshUsernameInput, sshPasswordInput, sshKeyfileInput].forEach(function(el) {
     el.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !connected) connect();
     });

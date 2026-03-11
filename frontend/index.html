@@ -91,6 +91,13 @@
           <span class="toolbar-label">Password</span>
           <input type="password" id="ssh-password" placeholder="password">
         </div>
+
+        <div class="toolbar-separator"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">Key</span>
+          <input type="text" id="ssh-keyfile" placeholder="~/.ssh/id_rsa">
+        </div>
       </div>
 
       <div class="toolbar-separator"></div>
@@ -308,6 +315,10 @@
                   <label>Username</label>
                   <input type="text" id="setting-ssh-username" placeholder="username" class="setting-input-lg">
                 </div>
+                <div class="setting-row">
+                  <label>Key File</label>
+                  <input type="text" id="setting-ssh-keyfile" placeholder="~/.ssh/id_rsa" class="setting-input-lg">
+                </div>
               </div>
             </div>
           </div>
@@ -405,6 +416,10 @@
               <div class="setting-row">
                 <label>Username</label>
                 <input type="text" id="new-session-username" placeholder="username" class="setting-input-lg">
+              </div>
+              <div class="setting-row">
+                <label>Key File</label>
+                <input type="text" id="new-session-keyfile" placeholder="~/.ssh/id_rsa" class="setting-input-lg">
               </div>
             </div>
           </div>

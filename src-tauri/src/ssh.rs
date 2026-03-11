@@ -65,7 +65,7 @@ pub struct SshConfig {
     pub port: u16,
     pub username: String,
     pub password: Option<String>,
-    // TODO: key-based auth support
+    pub key_file: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +83,126 @@ pub struct SshConnection {
 }
 
 impl SshConnection {
+    /// Try to load a private key from the given path, optionally decrypting
+    /// with a passphrase.  Returns the parsed key or an error string.
+    fn load_key(path: &str, passphrase: Option<&str>) -> Result<ssh_key::PrivateKey, String> {
+        // Expand ~ to home directory
+        let expanded = if path.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&path[2..]).to_string_lossy().to_string()
+            } else {
+                path.to_string()
+            }
+        } else {
+            path.to_string()
+        };
+
+        let key_data = std::fs::read_to_string(&expanded)
+            .map_err(|e| format!("Failed to read key file {}: {}", expanded, e))?;
+
+        let key = ssh_key::PrivateKey::from_openssh(key_data.as_bytes())
+            .or_else(|_| {
+                // If the key is encrypted, try decrypting with passphrase
+                if let Some(pass) = passphrase {
+                    let encrypted = ssh_key::PrivateKey::from_openssh(key_data.as_bytes())
+                        .map_err(|e| format!("Failed to parse key: {}", e))?;
+                    encrypted
+                        .decrypt(pass)
+                        .map_err(|e| format!("Failed to decrypt key: {}", e))
+                } else {
+                    Err("Key is encrypted but no passphrase provided".to_string())
+                }
+            })
+            .map_err(|e: String| e)?;
+
+        Ok(key)
+    }
+
+    /// Try key-based auth, then fall back to password auth if needed.
+    async fn authenticate(
+        handle: &mut client::Handle<SshClientHandler>,
+        config: &SshConfig,
+    ) -> Result<bool, String> {
+        let passphrase = config.password.as_deref();
+
+        // Collect key file paths to try
+        let mut key_paths: Vec<String> = Vec::new();
+        if let Some(ref kf) = config.key_file {
+            if !kf.is_empty() {
+                key_paths.push(kf.clone());
+            }
+        }
+
+        // If no explicit key file, try default key locations
+        if key_paths.is_empty() {
+            if let Some(home) = dirs::home_dir() {
+                let defaults = ["id_ed25519", "id_rsa"];
+                for name in &defaults {
+                    let p = home.join(".ssh").join(name);
+                    if p.exists() {
+                        key_paths.push(p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        // Try key-based authentication
+        for path in &key_paths {
+            match Self::load_key(path, passphrase) {
+                Ok(key) => {
+                    let hash_alg = if key.algorithm().is_rsa() {
+                        Some(ssh_key::HashAlg::Sha512)
+                    } else {
+                        None
+                    };
+                    let key_with_alg =
+                        russh_keys::key::PrivateKeyWithHashAlg::new(
+                            std::sync::Arc::new(key),
+                            hash_alg,
+                        )
+                        .map_err(|e| format!("Key hash alg error: {}", e))?;
+
+                    match handle
+                        .authenticate_publickey(&config.username, key_with_alg)
+                        .await
+                    {
+                        Ok(true) => {
+                            tracing::info!("SSH key auth succeeded with {}", path);
+                            return Ok(true);
+                        }
+                        Ok(false) => {
+                            tracing::info!("SSH key auth rejected for {}", path);
+                        }
+                        Err(e) => {
+                            tracing::warn!("SSH key auth error for {}: {}", path, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load key {}: {}", path, e);
+                }
+            }
+        }
+
+        // Fall back to password auth
+        if let Some(ref password) = config.password {
+            if !password.is_empty() {
+                let result = handle
+                    .authenticate_password(&config.username, password)
+                    .await
+                    .map_err(|e| format!("SSH auth error: {}", e))?;
+                return Ok(result);
+            }
+        }
+
+        // No auth method succeeded
+        if key_paths.is_empty() {
+            Err("No authentication method provided".to_string())
+        } else {
+            Ok(false)
+        }
+    }
+
     pub async fn connect(
         config: SshConfig,
         broadcast_tx: broadcast::Sender<Vec<u8>>,
@@ -112,16 +232,8 @@ impl SshConnection {
         .map_err(|e| format!("SSH connection failed: {}", e))?;
 
         // Authenticate
-        let auth_result = if let Some(ref password) = config.password {
-            handle
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| format!("SSH auth error: {}", e))?
-        } else {
-            return Err("No authentication method provided".to_string());
-        };
-
-        if !auth_result {
+        let authenticated = Self::authenticate(&mut handle, &config).await?;
+        if !authenticated {
             return Err("SSH authentication failed".to_string());
         }
 
