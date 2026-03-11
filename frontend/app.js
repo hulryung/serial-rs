@@ -88,6 +88,7 @@
   var settingsContext = null; // { mode: 'defaults' } or { mode: 'session', sessionId: '...' }
   var loggingActive = false;
   var loggingPath = null;
+  var collapsedFolders = {};
 
   // -----------------------------------------------------------------------
   // Defaults & Sessions data layer
@@ -103,7 +104,8 @@
     filterCuOnly: true,
     alwaysReconnect: false,
     rememberSsh: true,
-    sidebarOpen: false
+    sidebarOpen: false,
+    folders: []
   };
 
   var defaults = loadDefaults();
@@ -174,6 +176,70 @@
 
   function genId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+  }
+
+  // -----------------------------------------------------------------------
+  // Folder helpers
+  // -----------------------------------------------------------------------
+
+  function ensureFolder(name) {
+    if (!name) return;
+    if (!defaults.folders) defaults.folders = [];
+    if (defaults.folders.indexOf(name) === -1) {
+      defaults.folders.push(name);
+      saveDefaults();
+    }
+  }
+
+  function cleanupFolders() {
+    if (!defaults.folders) return;
+    var usedFolders = {};
+    sessions.forEach(function(s) {
+      if (s.folder) usedFolders[s.folder] = true;
+    });
+    defaults.folders = defaults.folders.filter(function(f) { return usedFolders[f]; });
+    saveDefaults();
+  }
+
+  function populateFolderSelect(selectEl, selectedFolder) {
+    selectEl.innerHTML = '<option value="">(None)</option>';
+    var folders = (defaults.folders || []).slice().sort();
+    folders.forEach(function(f) {
+      var opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = f;
+      selectEl.appendChild(opt);
+    });
+    var newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = 'New folder\u2026';
+    selectEl.appendChild(newOpt);
+    if (selectedFolder) selectEl.value = selectedFolder;
+  }
+
+  function setupFolderSelect(selectEl, newFolderRowId) {
+    var row = document.getElementById(newFolderRowId);
+    selectEl.addEventListener('change', function() {
+      if (selectEl.value === '__new__') {
+        row.classList.remove('hidden');
+        var input = row.querySelector('input');
+        if (input) input.focus();
+      } else {
+        row.classList.add('hidden');
+      }
+    });
+  }
+
+  function readFolderValue(selectEl, newFolderInputId) {
+    if (selectEl.value === '__new__') {
+      var name = document.getElementById(newFolderInputId).value.trim();
+      if (name) {
+        ensureFolder(name);
+        return name;
+      }
+      return null;
+    }
+    return selectEl.value || null;
   }
 
   // -----------------------------------------------------------------------
@@ -671,72 +737,140 @@
     }
   }
 
+  function buildSessionItem(s) {
+    var div = document.createElement('div');
+    div.className = 'session-item' + (s.id === activeSessionId ? ' active' : '');
+
+    var icon = document.createElement('span');
+    icon.className = 'session-icon';
+    icon.textContent = s.type === 'ssh' ? 'SSH' : 'COM';
+
+    var info = document.createElement('div');
+    info.className = 'session-info';
+    var name = document.createElement('div');
+    name.className = 'session-name';
+    name.textContent = s.name;
+    var detail = document.createElement('div');
+    detail.className = 'session-detail';
+    detail.textContent = s.type === 'ssh'
+      ? (s.username ? s.username + '@' : '') + (s.host || '')
+      : (s.port || 'No port');
+    info.appendChild(name);
+    info.appendChild(detail);
+
+    var actions = document.createElement('div');
+    actions.className = 'session-actions';
+
+    var editBtn = document.createElement('button');
+    editBtn.textContent = '\u270E';
+    editBtn.title = 'Edit';
+    editBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      openSessionSettings(s.id);
+    });
+
+    var delBtn = document.createElement('button');
+    delBtn.textContent = '\u2715';
+    delBtn.title = 'Delete';
+    delBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      sessions = sessions.filter(function(x) { return x.id !== s.id; });
+      saveSessions();
+      if (activeSessionId === s.id) activeSessionId = null;
+      cleanupFolders();
+      renderSessionList();
+    });
+
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+
+    div.appendChild(icon);
+    div.appendChild(info);
+    div.appendChild(actions);
+
+    div.addEventListener('dblclick', function() {
+      connectFromSession(s.id);
+    });
+
+    div.addEventListener('click', function() {
+      activeSessionId = s.id;
+      renderSessionList();
+    });
+
+    return div;
+  }
+
   function renderSessionList() {
     sessionList.innerHTML = '';
     if (sessions.length === 0) {
       sessionList.innerHTML = '<div class="session-empty">No saved sessions.<br>Click + to create one.</div>';
       return;
     }
+
+    // Separate root sessions and folder-grouped sessions
+    var rootSessions = [];
+    var folderMap = {};
     sessions.forEach(function(s) {
-      var div = document.createElement('div');
-      div.className = 'session-item' + (s.id === activeSessionId ? ' active' : '');
+      var folder = s.folder || '';
+      if (!folder) {
+        rootSessions.push(s);
+      } else {
+        if (!folderMap[folder]) folderMap[folder] = [];
+        folderMap[folder].push(s);
+      }
+    });
 
-      var icon = document.createElement('span');
-      icon.className = 'session-icon';
-      icon.textContent = s.type === 'ssh' ? 'SSH' : 'COM';
+    // Render root sessions first
+    rootSessions.forEach(function(s) {
+      sessionList.appendChild(buildSessionItem(s));
+    });
 
-      var info = document.createElement('div');
-      info.className = 'session-info';
-      var name = document.createElement('div');
-      name.className = 'session-name';
-      name.textContent = s.name;
-      var detail = document.createElement('div');
-      detail.className = 'session-detail';
-      detail.textContent = s.type === 'ssh'
-        ? (s.username ? s.username + '@' : '') + (s.host || '')
-        : (s.port || 'No port');
-      info.appendChild(name);
-      info.appendChild(detail);
+    // Render folders alphabetically
+    var folderNames = Object.keys(folderMap).sort();
+    folderNames.forEach(function(folderName) {
+      var isCollapsed = !!collapsedFolders[folderName];
+      var folderSessions = folderMap[folderName];
 
-      var actions = document.createElement('div');
-      actions.className = 'session-actions';
+      // Folder header
+      var header = document.createElement('div');
+      header.className = 'session-folder-header';
 
-      var editBtn = document.createElement('button');
-      editBtn.textContent = '\u270E';
-      editBtn.title = 'Edit';
-      editBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        openSessionSettings(s.id);
+      var chevron = document.createElement('span');
+      chevron.className = 'session-folder-chevron';
+      chevron.textContent = isCollapsed ? '\u25B6' : '\u25BC';
+
+      var folderIcon = document.createElement('span');
+      folderIcon.className = 'session-folder-icon';
+      folderIcon.textContent = '\uD83D\uDCC1';
+
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'session-folder-name';
+      nameSpan.textContent = folderName;
+
+      var countSpan = document.createElement('span');
+      countSpan.className = 'session-folder-count';
+      countSpan.textContent = folderSessions.length;
+
+      header.appendChild(chevron);
+      header.appendChild(folderIcon);
+      header.appendChild(nameSpan);
+      header.appendChild(countSpan);
+
+      // Folder body
+      var body = document.createElement('div');
+      body.className = 'session-folder-body' + (isCollapsed ? ' collapsed' : '');
+
+      folderSessions.forEach(function(s) {
+        body.appendChild(buildSessionItem(s));
       });
 
-      var delBtn = document.createElement('button');
-      delBtn.textContent = '\u2715';
-      delBtn.title = 'Delete';
-      delBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        sessions = sessions.filter(function(x) { return x.id !== s.id; });
-        saveSessions();
-        if (activeSessionId === s.id) activeSessionId = null;
+      header.addEventListener('click', function() {
+        collapsedFolders[folderName] = !collapsedFolders[folderName];
         renderSessionList();
       });
 
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
-
-      div.appendChild(icon);
-      div.appendChild(info);
-      div.appendChild(actions);
-
-      div.addEventListener('dblclick', function() {
-        connectFromSession(s.id);
-      });
-
-      div.addEventListener('click', function() {
-        activeSessionId = s.id;
-        renderSessionList();
-      });
-
-      sessionList.appendChild(div);
+      sessionList.appendChild(header);
+      sessionList.appendChild(body);
     });
   }
 
@@ -856,6 +990,11 @@
       document.getElementById('setting-ssh-keyfile').value = session.keyFile || '';
     }
 
+    // Folder dropdown
+    populateFolderSelect(document.getElementById('setting-folder'), session.folder || '');
+    document.getElementById('setting-new-folder-row').classList.add('hidden');
+    document.getElementById('setting-new-folder').value = '';
+
     // General tab behavior checkboxes
     filterCuCheckbox.checked = defaults.filterCuOnly;
     alwaysReconnectCheckbox.checked = defaults.alwaysReconnect;
@@ -909,6 +1048,9 @@
         }
       });
 
+      // Save folder
+      session.folder = readFolderValue(document.getElementById('setting-folder'), 'setting-new-folder');
+
       // Save connection fields directly (per-session, no defaults)
       if (session.type === 'serial') {
         session.port = document.getElementById('setting-port').value;
@@ -926,6 +1068,7 @@
 
       session.updatedAt = Date.now();
       saveSessions();
+      cleanupFolders();
       saveDefaults();
       renderSessionList();
 
@@ -1015,6 +1158,9 @@
     document.getElementById('new-session-ssh-port').value = defaults.sshPort;
     document.getElementById('new-session-username').value = '';
     document.getElementById('new-session-keyfile').value = '';
+    populateFolderSelect(document.getElementById('new-session-folder'), '');
+    document.getElementById('new-session-new-folder-row').classList.add('hidden');
+    document.getElementById('new-session-new-folder').value = '';
     refreshNewSessionPorts();
     newSessionModal.classList.remove('hidden');
   }
@@ -1023,11 +1169,13 @@
     var name = document.getElementById('new-session-name').value.trim();
     if (!name) name = 'Untitled';
     var type = newSessionTypeValue;
+    var folder = readFolderValue(document.getElementById('new-session-folder'), 'new-session-new-folder');
 
     var session = {
       id: genId(),
       name: name,
       type: type,
+      folder: folder,
       // Connection-specific
       host: type === 'ssh' ? document.getElementById('new-session-host').value.trim() : null,
       port: type === 'serial' ? document.getElementById('new-session-port').value : null,
@@ -1162,6 +1310,10 @@
     });
   });
   document.getElementById('new-session-refresh-btn').addEventListener('click', refreshNewSessionPorts);
+
+  // Folder select change handlers
+  setupFolderSelect(document.getElementById('new-session-folder'), 'new-session-new-folder-row');
+  setupFolderSelect(document.getElementById('setting-folder'), 'setting-new-folder-row');
 
   // Click terminal to close sidebar
   terminalContainer.addEventListener('click', closeSidebar);

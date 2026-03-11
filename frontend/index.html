@@ -243,6 +243,19 @@
 
           <!-- Connection tab (session edit only) -->
           <div id="settings-tab-connection" class="settings-tab-content hidden">
+            <div class="settings-section session-only hidden">
+              <h3>Organization</h3>
+              <div class="setting-row">
+                <label>Folder</label>
+                <select id="setting-folder" class="setting-input-lg">
+                  <option value="">(None)</option>
+                </select>
+              </div>
+              <div class="setting-row hidden" id="setting-new-folder-row">
+                <label>New Folder</label>
+                <input type="text" id="setting-new-folder" placeholder="Folder name" class="setting-input-lg">
+              </div>
+            </div>
             <div id="settings-conn-serial">
               <div class="settings-section">
                 <h3>Serial Port</h3>
@@ -340,6 +353,16 @@
           <div class="setting-row">
             <label>Name</label>
             <input type="text" id="new-session-name" placeholder="My Connection" class="setting-input-lg">
+          </div>
+          <div class="setting-row">
+            <label>Folder</label>
+            <select id="new-session-folder" class="setting-input-lg">
+              <option value="">(None)</option>
+            </select>
+          </div>
+          <div class="setting-row hidden" id="new-session-new-folder-row">
+            <label>New Folder</label>
+            <input type="text" id="new-session-new-folder" placeholder="Folder name" class="setting-input-lg">
           </div>
           <div class="new-session-type-tabs">
             <button class="new-session-type-tab active" data-type="serial">Serial</button>
