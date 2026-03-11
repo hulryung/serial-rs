@@ -1,109 +1,119 @@
-/* Reset and base */
-* { margin: 0; padding: 0; box-sizing: border-box; }
+/* ============================================================
+   serial-rs — Modern Dark UI
+   ============================================================ */
+
+/* Reset & base */
+.hidden { display: none !important; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  /* Surface palette */
+  --bg-base: #0c0e14;
+  --bg-surface: #13151d;
+  --bg-raised: #1a1d28;
+  --bg-overlay: #21242f;
+  --bg-hover: #272b38;
+
+  /* Border & line */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-focus: rgba(99, 130, 255, 0.5);
+
+  /* Text */
+  --text-primary: #e2e4ea;
+  --text-secondary: #8b8fa4;
+  --text-tertiary: #5c6078;
+
+  /* Accent */
+  --accent: #6382ff;
+  --accent-hover: #7b96ff;
+  --accent-muted: rgba(99, 130, 255, 0.12);
+  --accent-text: #a4b8ff;
+
+  /* Status */
+  --green: #3dd68c;
+  --red: #f05a5a;
+
+  /* Spacing & shape */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+}
+
 html, body {
   height: 100%;
   overflow: hidden;
-  background: #1a1a2e;
-  color: #d4d4d4;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* App layout */
-#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+/* ---- App layout ---- */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+}
 
-/* Mode tabs */
+/* ---- Mode tabs ---- */
 #mode-tabs {
   display: flex;
-  padding: 6px 12px 0;
-  background: #16213e;
+  padding: 8px 14px 0;
+  background: var(--bg-surface);
   gap: 2px;
   flex-shrink: 0;
 }
 
 .mode-tab {
-  padding: 5px 16px;
+  padding: 6px 18px;
   font-size: 12px;
   font-weight: 600;
-  border: 1px solid #0f3460;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  background: #1a1a2e;
-  color: #7a7a9e;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: all 0.15s ease;
 }
 
-.mode-tab:hover {
-  color: #d4d4d4;
-}
+.mode-tab:hover { color: var(--text-secondary); background: var(--bg-raised); }
 
 .mode-tab.active {
-  background: #e94560;
+  background: var(--accent);
   color: #fff;
-  border-color: #e94560;
+  border-color: var(--accent);
 }
 
-.mode-tab:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+.mode-tab:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* Toolbar */
+/* ---- Toolbar ---- */
 #toolbar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 12px;
-  background: #16213e;
-  border-bottom: 1px solid #0f3460;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-/* Config wrappers */
 #serial-config, #ssh-config {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
-
-#serial-config.hidden, #ssh-config.hidden {
-  display: none;
-}
-
-/* SSH text inputs */
-#ssh-config input[type="text"],
-#ssh-config input[type="password"],
-#ssh-config input[type="number"] {
-  background: #1a1a2e;
-  color: #d4d4d4;
-  border: 1px solid #0f3460;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s;
-  font-family: inherit;
-}
-
-#ssh-config input:hover {
-  border-color: #e94560;
-}
-
-#ssh-config input:focus {
-  border-color: #e94560;
-}
-
-#ssh-config input:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-#ssh-host { width: 160px; }
-#ssh-port.ssh-port-input { width: 64px; }
-#ssh-username { width: 110px; }
-#ssh-password { width: 120px; }
 
 .toolbar-group {
   display: flex;
@@ -113,92 +123,106 @@ html, body {
 
 .toolbar-separator {
   width: 1px;
-  height: 24px;
-  background: #0f3460;
-  margin: 0 4px;
-}
-
-#port-select {
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Responsive toolbar: hide separators and labels when narrow */
-@media (max-width: 680px) {
-  .toolbar-separator { display: none; }
-  .toolbar-label { display: none; }
-  #toolbar { gap: 4px; padding: 6px 8px; }
-  select, button, #ssh-config input { padding: 5px 6px; font-size: 12px; }
-  #connect-btn { min-width: 80px; }
-  #port-select { max-width: 160px; }
-  #ssh-host { width: 120px; }
-  #ssh-port.ssh-port-input { width: 50px; }
-  #ssh-username { width: 80px; }
-  #ssh-password { width: 90px; }
-}
-
-@media (max-width: 480px) {
-  #port-select { max-width: 120px; }
-  #status-indicator span { display: none; }
-  #ssh-host { width: 100px; }
-  #ssh-username { width: 70px; }
-  #ssh-password { width: 70px; }
+  height: 20px;
+  background: var(--border);
+  margin: 0 2px;
 }
 
 .toolbar-label {
-  font-size: 11px;
-  color: #7a7a9e;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
-/* Style selects and buttons with dark theme */
+/* ---- Global controls ---- */
 select, button {
-  background: #1a1a2e;
-  color: #d4d4d4;
-  border: 1px solid #0f3460;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
   padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: inherit;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: all 0.15s ease;
   outline: none;
 }
+
 select:hover, button:hover {
-  background: #1f2b4d;
-  border-color: #e94560;
-}
-select:focus, button:focus {
-  border-color: #e94560;
-}
-button:active { background: #2a3a5e; }
-select:disabled, button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+  background: var(--bg-hover);
+  border-color: rgba(255,255,255,0.1);
 }
 
+select:focus, button:focus { border-color: var(--border-focus); }
+button:active { background: var(--bg-overlay); }
+select:disabled, button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Text inputs */
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.15s ease;
+}
+input[type="text"]:hover,
+input[type="password"]:hover,
+input[type="number"]:hover { border-color: rgba(255,255,255,0.1); }
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus { border-color: var(--border-focus); }
+input:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* SSH inputs sizing */
+#ssh-host { width: 160px; }
+#ssh-port.ssh-port-input { width: 60px; }
+#ssh-username { width: 110px; }
+#ssh-password { width: 120px; }
+#port-select { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Connect button */
 #connect-btn {
   min-width: 100px;
   font-weight: 600;
-  background: #0f3460;
-  border-color: #e94560;
-  color: #e94560;
-}
-#connect-btn:hover { background: #e94560; color: #fff; }
-#connect-btn.connected {
-  background: #e94560;
-  border-color: #e94560;
-  color: #fff;
-}
-#connect-btn.connected:hover { background: #c0392b; }
-
-#refresh-btn { padding: 6px 10px; font-size: 15px; }
-
-/* Status indicator */
-#status-indicator {
   font-size: 12px;
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+}
+#connect-btn:hover { background: var(--accent-hover); }
+#connect-btn.connected {
+  background: var(--red);
+  border-color: transparent;
+}
+#connect-btn.connected:hover { background: #d94e4e; }
+
+/* Icon buttons */
+#refresh-btn, #sessions-btn, #settings-btn {
+  padding: 6px 8px;
+  font-size: 14px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+#refresh-btn:hover, #sessions-btn:hover, #settings-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* ---- Status indicator ---- */
+#status-indicator {
+  font-size: 11px;
   font-weight: 500;
   display: flex;
   align-items: center;
@@ -208,99 +232,276 @@ select:disabled, button:disabled {
 #status-indicator::before {
   content: '';
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
 }
-#status-indicator.disconnected { color: #7a7a9e; }
-#status-indicator.disconnected::before { background: #e74c3c; }
-#status-indicator.connected { color: #2ecc71; }
+#status-indicator.disconnected { color: var(--text-tertiary); }
+#status-indicator.disconnected::before { background: var(--red); opacity: 0.6; }
+#status-indicator.connected { color: var(--green); }
 #status-indicator.connected::before {
-  background: #2ecc71;
-  box-shadow: 0 0 6px #2ecc71;
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(61, 214, 140, 0.4);
 }
 
-/* Terminal fills remaining space - prevent overflow */
+/* ---- Terminal ---- */
 #terminal-container {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 4px;
+  padding: 2px;
+  background: var(--bg-base);
 }
 
-/* Bottom status bar - also prevents macOS rounded corner clipping */
+/* ---- Status bar ---- */
 #statusbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 16px;
-  background: #16213e;
-  border-top: 1px solid #0f3460;
+  padding: 3px 14px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+#statusbar-left { display: flex; align-items: center; gap: 10px; }
+
+/* ---- Session Sidebar ---- */
+#session-sidebar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 250px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  transform: translateX(-100%);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+#session-sidebar.open { transform: translateX(0); }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
   font-size: 12px;
-  color: #7a7a9e;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
   flex-shrink: 0;
 }
 
-#statusbar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.sidebar-header button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+}
+.sidebar-header button:hover {
+  border-color: var(--border-focus);
+  color: var(--accent);
+  background: var(--accent-muted);
 }
 
-/* Settings button */
-#settings-btn { padding: 6px 10px; font-size: 15px; }
+#session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
 
-/* Settings modal overlay */
+/* Custom scrollbar */
+#session-list::-webkit-scrollbar { width: 4px; }
+#session-list::-webkit-scrollbar-track { background: transparent; }
+#session-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.session-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: all 0.1s ease;
+  gap: 10px;
+}
+.session-item:hover { background: var(--bg-raised); }
+.session-item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.session-icon {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  width: 28px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-overlay);
+  border-radius: 4px;
+  letter-spacing: -0.02em;
+}
+
+.session-info { flex: 1; min-width: 0; overflow: hidden; }
+
+.session-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-detail {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.session-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.session-item:hover .session-actions { opacity: 1; }
+
+.session-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 3px 5px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.session-actions button:hover {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.session-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+/* ---- Modal overlay ---- */
 .settings-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
 }
-.settings-overlay.hidden { display: none; }
 
 .settings-dialog {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 380px;
   max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255,255,255,0.03);
 }
+.settings-dialog-wide { width: 460px; }
+
+/* Custom scrollbar for dialog */
+.settings-dialog::-webkit-scrollbar { width: 4px; }
+.settings-dialog::-webkit-scrollbar-track { background: transparent; }
+.settings-dialog::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid #0f3460;
-  font-size: 15px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
   font-weight: 600;
-  color: #d4d4d4;
+  color: var(--text-primary);
 }
 
 .settings-header button {
-  background: none;
+  background: transparent;
   border: none;
-  color: #7a7a9e;
-  font-size: 20px;
+  color: var(--text-tertiary);
+  font-size: 18px;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   line-height: 1;
 }
-.settings-header button:hover { color: #e94560; }
+.settings-header button:hover { color: var(--text-primary); background: var(--bg-hover); }
 
-.settings-body { padding: 16px 18px; }
+/* Settings tabs */
+.settings-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  gap: 4px;
+}
+
+.settings-tab {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.settings-tab:hover { color: var(--text-secondary); background: transparent; }
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: transparent;
+}
+
+.settings-body { padding: 18px 20px; }
+.settings-tab-content.hidden { display: none; }
 
 .settings-section h3 {
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #7a7a9e;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
   margin-bottom: 10px;
+}
+
+.settings-section + .settings-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-option {
@@ -308,30 +509,117 @@ select:disabled, button:disabled {
   align-items: center;
   gap: 10px;
   font-size: 13px;
-  color: #d4d4d4;
+  color: var(--text-primary);
   cursor: pointer;
-  padding: 6px 0;
+  padding: 7px 0;
+  border-radius: var(--radius-sm);
 }
 
 .settings-option input[type="checkbox"] {
-  accent-color: #e94560;
-  width: 16px;
-  height: 16px;
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
   cursor: pointer;
 }
 
-.settings-section-ssh {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #0f3460;
+.settings-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
+
+/* Setting row */
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 13px;
+}
+
+.setting-row > label:first-child {
+  width: 80px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.setting-input-sm { width: 100px; }
+.setting-input-lg { flex: 1; min-width: 0; }
+
+/* Modal inputs override */
+.settings-body input[type="text"],
+.settings-body input[type="number"],
+.settings-body select {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+.settings-body input:hover,
+.settings-body select:hover { border-color: rgba(255,255,255,0.1); }
+.settings-body input:focus,
+.settings-body select:focus { border-color: var(--border-focus); }
+.settings-body input:disabled,
+.settings-body select:disabled { opacity: 0.35; }
+
+.setting-color {
+  width: 34px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  cursor: pointer;
+  padding: 2px;
+}
+.setting-color:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Use default checkbox */
+.use-default-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  cursor: pointer;
+  margin-left: auto;
+}
+.use-default-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+/* Primary button */
+.btn-primary {
+  min-width: 80px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-primary:hover { background: var(--accent-hover); }
 
 /* Confirm modal */
 .confirm-message {
   font-size: 13px;
-  color: #d4d4d4;
-  margin-bottom: 16px;
-  line-height: 1.5;
+  color: var(--text-primary);
+  margin-bottom: 18px;
+  line-height: 1.6;
 }
 
 .confirm-buttons {
@@ -342,28 +630,88 @@ select:disabled, button:disabled {
 
 .confirm-buttons button {
   min-width: 80px;
-  padding: 7px 14px;
-  font-size: 13px;
-  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
 }
 
-#confirm-reconnect {
-  background: #0f3460;
-  border-color: #e94560;
-  color: #e94560;
+#confirm-reconnect, #confirm-always {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
 }
-#confirm-reconnect:hover { background: #e94560; color: #fff; }
-
-#confirm-always {
-  background: #0f3460;
-  border-color: #e94560;
-  color: #e94560;
-}
-#confirm-always:hover { background: #e94560; color: #fff; }
+#confirm-reconnect:hover, #confirm-always:hover { background: var(--accent-hover); }
 
 #confirm-cancel {
-  background: #1a1a2e;
-  border-color: #0f3460;
-  color: #7a7a9e;
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text-secondary);
 }
-#confirm-cancel:hover { background: #1f2b4d; }
+#confirm-cancel:hover { background: var(--bg-hover); }
+
+/* New session type tabs */
+.new-session-type-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--bg-base);
+  padding: 3px;
+  border-radius: var(--radius-md);
+}
+
+.new-session-type-tab {
+  flex: 1;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.new-session-type-tab:hover { color: var(--text-secondary); }
+.new-session-type-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Icon button */
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  line-height: 1;
+}
+.btn-icon:hover {
+  border-color: var(--border-focus);
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 680px) {
+  .toolbar-separator { display: none; }
+  .toolbar-label { display: none; }
+  #toolbar { gap: 4px; padding: 8px 10px; }
+  select, button, input { font-size: 11px; }
+  #connect-btn { min-width: 80px; }
+  #port-select { max-width: 160px; }
+  #ssh-host { width: 120px; }
+  #ssh-port.ssh-port-input { width: 50px; }
+  #ssh-username { width: 80px; }
+  #ssh-password { width: 90px; }
+}
+
+@media (max-width: 480px) {
+  #port-select { max-width: 120px; }
+  #ssh-host { width: 100px; }
+  #ssh-username { width: 70px; }
+  #ssh-password { width: 70px; }
+}

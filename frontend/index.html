@@ -14,6 +14,10 @@
       <button class="mode-tab" data-mode="ssh">SSH</button>
     </div>
     <div id="toolbar">
+      <button id="sessions-btn" title="Sessions">&#x2630;</button>
+
+      <div class="toolbar-separator"></div>
+
       <div id="serial-config">
         <div class="toolbar-group">
           <span class="toolbar-label">Port</span>
@@ -93,6 +97,15 @@
       <button id="settings-btn" title="Settings">&#x2699;</button>
     </div>
 
+    <!-- Session sidebar -->
+    <div id="session-sidebar">
+      <div class="sidebar-header">
+        <span>Sessions</span>
+        <button id="session-add-btn" title="New session">+</button>
+      </div>
+      <div id="session-list"></div>
+    </div>
+
     <div id="confirm-modal" class="settings-overlay hidden">
       <div class="settings-dialog">
         <div class="settings-header">
@@ -109,34 +122,243 @@
       </div>
     </div>
 
+    <!-- Settings / Session edit modal -->
     <div id="settings-modal" class="settings-overlay hidden">
-      <div class="settings-dialog">
+      <div class="settings-dialog settings-dialog-wide">
         <div class="settings-header">
-          <span>Settings</span>
+          <span id="settings-title">Settings</span>
           <button id="settings-close-btn" title="Close">&times;</button>
         </div>
+        <div class="settings-tabs">
+          <button class="settings-tab active" data-tab="general">General</button>
+          <button class="settings-tab" data-tab="terminal">Terminal</button>
+          <button class="settings-tab session-only hidden" data-tab="connection">Connection</button>
+        </div>
         <div class="settings-body">
-          <div class="settings-section">
-            <h3>Port</h3>
-            <label class="settings-option">
-              <input type="checkbox" id="setting-filter-cu" checked>
-              <span>Show only /dev/cu.* ports</span>
-            </label>
-            <label class="settings-option">
-              <input type="checkbox" id="setting-always-reconnect">
-              <span>Always reconnect (skip confirmation)</span>
-            </label>
+          <!-- General tab -->
+          <div id="settings-tab-general" class="settings-tab-content">
+            <div class="settings-section">
+              <h3>Behavior</h3>
+              <label class="settings-option">
+                <input type="checkbox" id="setting-filter-cu" checked>
+                <span>Show only /dev/cu.* ports</span>
+              </label>
+              <label class="settings-option">
+                <input type="checkbox" id="setting-always-reconnect">
+                <span>Always reconnect (skip confirmation)</span>
+              </label>
+              <label class="settings-option">
+                <input type="checkbox" id="setting-remember-ssh" checked>
+                <span>Remember SSH connections</span>
+              </label>
+            </div>
           </div>
-          <div class="settings-section settings-section-ssh">
-            <h3>SSH</h3>
-            <label class="settings-option">
-              <input type="checkbox" id="setting-remember-ssh" checked>
-              <span>Remember SSH connections</span>
-            </label>
+
+          <!-- Terminal tab -->
+          <div id="settings-tab-terminal" class="settings-tab-content hidden">
+            <div class="settings-section">
+              <h3>Font</h3>
+              <div class="setting-row">
+                <label>Size</label>
+                <input type="number" id="setting-font-size" min="8" max="32" value="14" class="setting-input-sm">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="fontSize"> Use default</label>
+              </div>
+              <div class="setting-row">
+                <label>Family</label>
+                <input type="text" id="setting-font-family" value="Menlo, Monaco, &quot;Courier New&quot;, monospace" class="setting-input-lg">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="fontFamily"> Use default</label>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3>Colors</h3>
+              <div class="setting-row">
+                <label>Background</label>
+                <input type="color" id="setting-bg-color" value="#1a1a2e" class="setting-color">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="themeBackground"> Use default</label>
+              </div>
+              <div class="setting-row">
+                <label>Foreground</label>
+                <input type="color" id="setting-fg-color" value="#d4d4d4" class="setting-color">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="themeForeground"> Use default</label>
+              </div>
+              <div class="setting-row">
+                <label>Cursor</label>
+                <input type="color" id="setting-cursor-color" value="#e94560" class="setting-color">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="themeCursor"> Use default</label>
+              </div>
+              <div class="setting-row">
+                <label>Selection</label>
+                <input type="color" id="setting-sel-color" value="#0f3460" class="setting-color">
+                <label class="use-default-label session-only hidden"><input type="checkbox" class="use-default-cb" data-field="themeSelection"> Use default</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Connection tab (session edit only) -->
+          <div id="settings-tab-connection" class="settings-tab-content hidden">
+            <div id="settings-conn-serial">
+              <div class="settings-section">
+                <h3>Serial Port</h3>
+                <div class="setting-row">
+                  <label>Port</label>
+                  <select id="setting-port" class="setting-input-lg">
+                    <option value="">Select Port...</option>
+                  </select>
+                  <button id="setting-refresh-port-btn" class="btn-icon" title="Refresh ports">&#x21bb;</button>
+                </div>
+              </div>
+              <div class="settings-section">
+                <h3>Parameters</h3>
+                <div class="setting-row">
+                  <label>Baud Rate</label>
+                  <select id="setting-baud" class="setting-input-sm">
+                    <option value="9600">9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                    <option value="57600">57600</option>
+                    <option value="115200">115200</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label>Data Bits</label>
+                  <select id="setting-databits" class="setting-input-sm">
+                    <option value="8">8</option>
+                    <option value="7">7</option>
+                    <option value="6">6</option>
+                    <option value="5">5</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label>Stop Bits</label>
+                  <select id="setting-stopbits" class="setting-input-sm">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label>Parity</label>
+                  <select id="setting-parity" class="setting-input-sm">
+                    <option value="none">None</option>
+                    <option value="odd">Odd</option>
+                    <option value="even">Even</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div id="settings-conn-ssh" class="hidden">
+              <div class="settings-section">
+                <h3>SSH Connection</h3>
+                <div class="setting-row">
+                  <label>Host</label>
+                  <input type="text" id="setting-ssh-host" placeholder="hostname or IP" class="setting-input-lg">
+                </div>
+                <div class="setting-row">
+                  <label>Port</label>
+                  <input type="number" id="setting-ssh-port" value="22" class="setting-input-sm">
+                </div>
+                <div class="setting-row">
+                  <label>Username</label>
+                  <input type="text" id="setting-ssh-username" placeholder="username" class="setting-input-lg">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-footer">
+          <button id="settings-save-btn" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New session modal -->
+    <div id="new-session-modal" class="settings-overlay hidden">
+      <div class="settings-dialog settings-dialog-wide">
+        <div class="settings-header">
+          <span>New Session</span>
+          <button id="new-session-close-btn" title="Close">&times;</button>
+        </div>
+        <div class="settings-body">
+          <div class="setting-row">
+            <label>Name</label>
+            <input type="text" id="new-session-name" placeholder="My Connection" class="setting-input-lg">
+          </div>
+          <div class="new-session-type-tabs">
+            <button class="new-session-type-tab active" data-type="serial">Serial</button>
+            <button class="new-session-type-tab" data-type="ssh">SSH</button>
+          </div>
+          <div id="new-session-serial-fields">
+            <div class="settings-section">
+              <h3>Connection</h3>
+              <div class="setting-row">
+                <label>Port</label>
+                <select id="new-session-port" class="setting-input-lg">
+                  <option value="">Select Port...</option>
+                </select>
+                <button id="new-session-refresh-btn" title="Refresh ports" class="btn-icon">&#x21bb;</button>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3>Serial Parameters</h3>
+              <div class="setting-row">
+                <label>Baud Rate</label>
+                <select id="new-session-baud" class="setting-input-sm">
+                  <option value="9600">9600</option>
+                  <option value="19200">19200</option>
+                  <option value="38400">38400</option>
+                  <option value="57600">57600</option>
+                  <option value="115200" selected>115200</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label>Data Bits</label>
+                <select id="new-session-databits" class="setting-input-sm">
+                  <option value="8" selected>8</option>
+                  <option value="7">7</option>
+                  <option value="6">6</option>
+                  <option value="5">5</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label>Stop Bits</label>
+                <select id="new-session-stopbits" class="setting-input-sm">
+                  <option value="1" selected>1</option>
+                  <option value="2">2</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label>Parity</label>
+                <select id="new-session-parity" class="setting-input-sm">
+                  <option value="none" selected>None</option>
+                  <option value="odd">Odd</option>
+                  <option value="even">Even</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="new-session-ssh-fields" class="hidden">
+            <div class="settings-section">
+              <h3>Connection</h3>
+              <div class="setting-row">
+                <label>Host</label>
+                <input type="text" id="new-session-host" placeholder="hostname or IP" class="setting-input-lg">
+              </div>
+              <div class="setting-row">
+                <label>Port</label>
+                <input type="number" id="new-session-ssh-port" value="22" class="setting-input-sm">
+              </div>
+              <div class="setting-row">
+                <label>Username</label>
+                <input type="text" id="new-session-username" placeholder="username" class="setting-input-lg">
+              </div>
+            </div>
+          </div>
+          <div class="confirm-buttons" style="margin-top: 16px;">
+            <button id="new-session-create-btn" class="btn-primary">Create</button>
           </div>
         </div>
       </div>
     </div>
+
     <div id="terminal-container"></div>
     <div id="statusbar">
       <span id="statusbar-left">

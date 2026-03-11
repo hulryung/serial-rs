@@ -28,6 +28,7 @@ use rust_embed::Embed;
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tokio_serial::SerialPortBuilderExt;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 // ---------------------------------------------------------------------------
 // Embedded frontend assets
@@ -873,7 +874,7 @@ async fn start_axum_server() {
 
     let cors = CorsLayer::very_permissive();
 
-    let app = Router::new()
+    let api = Router::new()
         .route("/api/ports", get(list_ports))
         .route("/api/connect", post(connect))
         .route("/api/disconnect", post(disconnect))
@@ -882,9 +883,18 @@ async fn start_axum_server() {
         .route("/ws", get(ws_handler))
         .route("/api/zmodem/files", get(zmodem_list_files))
         .route("/api/zmodem/download/{filename}", get(zmodem_download_file))
-        .with_state(state.clone())
-        .fallback(static_handler)
-        .layer(cors);
+        .with_state(state.clone());
+
+    // In debug mode, serve frontend files from disk (no restart needed for UI changes).
+    // In release mode, use embedded assets.
+    let app = if cfg!(debug_assertions) {
+        let frontend_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../frontend");
+        tracing::info!("Serving frontend from disk: {}", frontend_dir.display());
+        api.fallback_service(ServeDir::new(frontend_dir))
+    } else {
+        api.fallback(static_handler)
+    }
+    .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
